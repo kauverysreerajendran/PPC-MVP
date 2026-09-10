@@ -3,7 +3,7 @@
 ruff==0.16.*        # pyproject ignore list uses UP042/UP046/UP047 (ruff >=0.14)
 mypy==1.13.*
 pytest==8.3.*
-pytest-asyncio==0.24.*
+pytest-asyncio==1.4.*
 pytest-cov==5.0.*
 pytest-mock==3.14.*
 anyio==4.6.*
