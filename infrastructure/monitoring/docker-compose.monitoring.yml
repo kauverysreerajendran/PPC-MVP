@@ -1,0 +1,48 @@
+# Opt-in observability stack:  docker compose -f docker-compose.yml \
+#   -f infrastructure/monitoring/docker-compose.monitoring.yml --profile monitoring up
+name: acme-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: [monitoring]
+    volumes:
+      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9090:9090"]
+    networks: [internal]
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    profiles: [monitoring]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./infrastructure/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./infrastructure/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports: ["3001:3000"]
+    networks: [internal]
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    profiles: [monitoring]
+    command: ["--redis.addr=redis://redis:6379"]
+    networks: [internal]
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    profiles: [monitoring]
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+    networks: [internal]
+
+  celery-exporter:
+    image: danihodovic/celery-exporter:0.10.9
+    profiles: [monitoring]
+    environment:
+      CE_BROKER_URL: ${CELERY_BROKER_URL}
+    networks: [internal]
+
+networks:
+  internal:
+    external: true
+    name: acme-dev_internal

@@ -1,0 +1,14 @@
+-r base.txt
+
+ruff==0.16.*        # pyproject ignore list uses UP042/UP046/UP047 (ruff >=0.14)
+mypy==1.13.*
+pytest==8.3.*
+pytest-asyncio==0.24.*
+pytest-cov==5.0.*
+pytest-mock==3.14.*
+anyio==4.6.*
+testcontainers[postgres]==4.8.*
+fakeredis==2.24.*
+faker==30.*
+pip-audit==2.7.*
+types-python-jose

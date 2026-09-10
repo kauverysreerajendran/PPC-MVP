@@ -1,0 +1,542 @@
+@import "tailwindcss";
+
+/* Make `dark:` utilities follow both the OS setting and the manual data-theme
+   toggle, mirroring the token overrides below. */
+@custom-variant dark {
+  @media (prefers-color-scheme: dark) {
+    &:where(:not([data-theme="light"]), :not([data-theme="light"]) *) {
+      @slot;
+    }
+  }
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+}
+
+/* ============================================================
+   TITAN Design System — centralized design tokens
+   Teal-forward, enterprise, minimal. Change values here to
+   re-skin the entire application.
+   ============================================================ */
+
+@theme {
+  /* Brand — Teal */
+  --color-teal-50: #edfafa;
+  --color-teal-100: #d5f5f6;
+  --color-teal-200: #afecef;
+  --color-teal-300: #7edce2;
+  --color-teal-400: #16b8c9;
+  --color-teal-500: #0d9aa8;
+  --color-teal-600: #0b7c88;
+  --color-teal-700: #0e626c;
+  --color-teal-800: #124f58;
+  --color-teal-900: #134049;
+
+  --color-primary: var(--color-teal-600);
+  --color-primary-hover: var(--color-teal-700);
+  --color-primary-light: var(--color-teal-50);
+  --color-primary-fg: #ffffff;
+
+  /* Neutrals / surfaces (light) */
+  --color-bg: #f4f6f8;
+  --color-surface: #ffffff;
+  --color-surface-2: #f8fafb;
+  --color-border: #e2e8f0;
+  --color-border-strong: #cbd5e1;
+  --color-text: #16212b;
+  --color-text-secondary: #5b6b7a;
+  --color-text-muted: #8a99a8;
+
+  /* Semantic */
+  --color-success: #0f9d58;
+  --color-success-bg: #e7f6ee;
+  --color-warning: #b8860b;
+  --color-warning-bg: #fdf4e3;
+  --color-danger: #d64545;
+  --color-danger-bg: #fdecec;
+  --color-info: var(--color-teal-600);
+  --color-info-bg: var(--color-teal-50);
+
+  /* Radius */
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+
+  /* Shadow — restrained */
+  --shadow-sm: 0 1px 2px 0 rgb(16 33 43 / 0.06);
+  --shadow-md: 0 2px 8px -2px rgb(16 33 43 / 0.10), 0 1px 3px -1px rgb(16 33 43 / 0.06);
+  --shadow-lg: 0 12px 32px -8px rgb(16 33 43 / 0.18);
+
+  /* Typography */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Dark theme token overrides */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: #0d1418;
+    --color-surface: #131e24;
+    --color-surface-2: #0f191e;
+    --color-border: #223138;
+    --color-border-strong: #2f434c;
+    --color-text: #e6edf1;
+    --color-text-secondary: #9fb0b9;
+    --color-text-muted: #6f8791;
+    --color-primary: var(--color-teal-400);
+    --color-primary-hover: var(--color-teal-300);
+    --color-primary-light: #12333a;
+    --color-primary-fg: #042226;
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-bg: #0d1418;
+  --color-surface: #131e24;
+  --color-surface-2: #0f191e;
+  --color-border: #223138;
+  --color-border-strong: #2f434c;
+  --color-text: #e6edf1;
+  --color-text-secondary: #9fb0b9;
+  --color-text-muted: #6f8791;
+  --color-primary: var(--color-teal-400);
+  --color-primary-hover: var(--color-teal-300);
+  --color-primary-light: #12333a;
+  --color-primary-fg: #042226;
+}
+
+* {
+  box-sizing: border-box;
+  border-color: var(--color-border);
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  background: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+::selection {
+  background: var(--color-teal-200);
+  color: var(--color-teal-900);
+}
+
+/* Scrollbars — scoped to real scroll surfaces, not form controls */
+html,
+body,
+[data-scroll],
+main,
+.overflow-y-auto,
+.overflow-auto {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+main::-webkit-scrollbar,
+.overflow-y-auto::-webkit-scrollbar,
+.overflow-auto::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb,
+main::-webkit-scrollbar-thumb,
+.overflow-y-auto::-webkit-scrollbar-thumb,
+.overflow-auto::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 999px;
+  border: 3px solid var(--color-bg);
+}
+
+/* ---- Keyframes (subtle, 150–300ms) ---- */
+@keyframes ds-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes ds-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes ds-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes ds-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Logo shine — a light line sweeps top-to-bottom across the mark */
+@keyframes ds-shine {
+  0% {
+    transform: translateY(-140%) rotate(8deg);
+  }
+  22%,
+  100% {
+    transform: translateY(140%) rotate(8deg);
+  }
+}
+.ds-shine {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.ds-shine::after {
+  content: "";
+  position: absolute;
+  left: -20%;
+  right: -20%;
+  top: 0;
+  height: 45%;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(255, 255, 255, 0.7),
+    transparent
+  );
+  transform: translateY(-140%) rotate(8deg);
+  animation: ds-shine 3.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  pointer-events: none;
+}
+
+@keyframes ds-scanline {
+  0%,
+  100% {
+    transform: translateY(-18px);
+    opacity: 0;
+  }
+  10%,
+  90% {
+    opacity: 1;
+  }
+  50% {
+    transform: translateY(18px);
+    opacity: 1;
+  }
+}
+.ds-scanline {
+  animation: ds-scanline 2.4s ease-in-out infinite;
+}
+
+/* Slow ocean-wave drift for decorative banner SVG layers. Each wave path tiles
+   every 400px, so translating by a 400px multiple loops seamlessly. */
+@keyframes ds-wave-drift {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-1200px);
+  }
+}
+.ds-wave {
+  animation: ds-wave-drift linear infinite;
+  transform-box: view-box;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+.ds-wave-1 {
+  animation-duration: 12s;
+}
+.ds-wave-2 {
+  animation-duration: 17s;
+  animation-direction: reverse;
+}
+.ds-wave-3 {
+  animation-duration: 9s;
+}
+/* small-viewBox variant: paths tile every 200px */
+@keyframes ds-wave-drift-sm {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-200px);
+  }
+}
+.ds-wave-sm {
+  animation: ds-wave-drift-sm linear infinite;
+  transform-box: view-box;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+.ds-wave-sm-1 {
+  animation-duration: 10s;
+}
+.ds-wave-sm-2 {
+  animation-duration: 15s;
+  animation-direction: reverse;
+}
+
+/* gentle float, as if bobbing on the swell */
+@keyframes ds-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-3px) rotate(-3deg);
+  }
+}
+.ds-bob {
+  animation: ds-bob 3.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-wave,
+  .ds-wave-sm,
+  .ds-bob {
+    animation: none;
+  }
+}
+
+.ds-animate-fade {
+  animation: ds-fade-in 0.2s var(--ease-out) both;
+}
+.ds-animate-fade-up {
+  animation: ds-fade-up 0.24s var(--ease-out) both;
+}
+.ds-animate-scale {
+  animation: ds-scale-in 0.18s var(--ease-out) both;
+}
+
+.ds-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--color-text-muted) 16%, transparent);
+  border-radius: var(--radius-sm);
+}
+.ds-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-surface) 60%, transparent),
+    transparent
+  );
+  animation: ds-shimmer 1.4s infinite;
+}
+
+/* Navigation buffering — hourglass tips over and settles, then repeats */
+@keyframes ds-hourglass {
+  0% {
+    transform: rotate(0deg);
+  }
+  45%,
+  50% {
+    transform: rotate(180deg);
+  }
+  95%,
+  100% {
+    transform: rotate(360deg);
+  }
+}
+.ds-hourglass {
+  animation: ds-hourglass 1.4s var(--ease-out) infinite;
+}
+
+/* --------------------------------------------------------------------------
+ * Table value chips — categorical pills + tinted numeric cells
+ * ------------------------------------------------------------------------ */
+.ds-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--ds-chip, var(--color-primary)) 14%, transparent);
+  color: color-mix(in srgb, var(--ds-chip, var(--color-primary)) 62%, var(--color-text));
+  border: 1px solid color-mix(in srgb, var(--ds-chip, var(--color-primary)) 24%, transparent);
+}
+.ds-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* deterministic categorical hues (light + dark safe via color-mix) */
+.ds-chip-0 { --ds-chip: #2563eb; }
+.ds-chip-1 { --ds-chip: #7c3aed; }
+.ds-chip-2 { --ds-chip: #0d9488; }
+.ds-chip-3 { --ds-chip: #db2777; }
+.ds-chip-4 { --ds-chip: #ea580c; }
+.ds-chip-5 { --ds-chip: #16a34a; }
+.ds-chip-6 { --ds-chip: #ca8a04; }
+.ds-chip-7 { --ds-chip: #0891b2; }
+
+.ds-chip-muted {
+  --ds-chip: var(--color-text-muted);
+  font-weight: 500;
+}
+.ds-chip-success { --ds-chip: var(--color-success); }
+
+/* link-style identifier cells (DC / PO numbers) */
+.ds-cell-id {
+  font-weight: 500;
+  color: var(--color-primary);
+}
+
+/* tinted numeric cell */
+.ds-num {
+  display: inline-block;
+  min-width: 2.25rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--ds-chip, var(--color-primary)) 12%, transparent);
+  color: color-mix(in srgb, var(--ds-chip, var(--color-primary)) 66%, var(--color-text));
+}
+
+/* Indeterminate network-activity bar — a sliver that sweeps left→right */
+@keyframes ds-net-sweep {
+  0% {
+    left: -35%;
+    width: 35%;
+  }
+  60% {
+    left: 100%;
+    width: 45%;
+  }
+  100% {
+    left: 100%;
+    width: 45%;
+  }
+}
+.ds-net-bar {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: var(--color-primary);
+  box-shadow: 0 0 8px var(--color-primary);
+  animation: ds-net-sweep 1.1s var(--ease-out) infinite;
+}
+.ds-net-bar-slow {
+  animation-duration: 1.9s;
+  opacity: 0.9;
+}
+
+/* --------------------------------------------------------------------------
+ * "Network's crawling" banner — a slow-net mascot that drops in up top
+ * ------------------------------------------------------------------------ */
+@keyframes ds-slownet-drop {
+  from { transform: translateY(-120%); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+@keyframes ds-snail-bob {
+  0%, 100% { transform: translateY(0) rotate(-1deg); }
+  50%      { transform: translateY(-1.5px) rotate(1deg); }
+}
+@keyframes ds-snail-crawl {
+  0%, 100% { transform: translateX(0); }
+  50%      { transform: translateX(2px); }
+}
+@keyframes ds-snail-eye {
+  0%, 92%, 100% { transform: scaleY(1); }
+  96%           { transform: scaleY(0.1); }
+}
+@keyframes ds-snail-trail {
+  to { stroke-dashoffset: -24; }
+}
+@keyframes ds-slownet-caption {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.ds-slownet {
+  animation: ds-slownet-drop 0.4s var(--ease-out) both;
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--color-warning) 22%, var(--color-surface)),
+      color-mix(in srgb, var(--color-warning) 9%, var(--color-surface))
+    );
+  border: 1px solid color-mix(in srgb, var(--color-warning) 38%, transparent);
+  border-top: none;
+  box-shadow: var(--shadow-lg);
+}
+.ds-snail { animation: ds-snail-bob 2.4s ease-in-out infinite; transform-origin: 60% 80%; }
+.ds-snail-foot { animation: ds-snail-crawl 1.2s ease-in-out infinite; }
+.ds-snail-eye { animation: ds-snail-eye 4s ease-in-out infinite; transform-origin: center; }
+.ds-snail-trail {
+  stroke-dasharray: 3 5;
+  animation: ds-snail-trail 1.1s linear infinite;
+}
+.ds-slownet-caption { animation: ds-slownet-caption 0.35s var(--ease-out) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-slownet, .ds-snail, .ds-snail-foot, .ds-snail-eye,
+  .ds-snail-trail, .ds-slownet-caption { animation: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::after,
+  *::before {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Utilities bound to tokens */
+.ds-focus-ring:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}

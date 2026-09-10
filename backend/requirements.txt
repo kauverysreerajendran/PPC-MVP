@@ -1,0 +1,3 @@
+# IDE/tooling convenience pointer — actual dependency sets live in requirements/.
+# Local dev: -r requirements/dev.txt   Prod: -r requirements/prod.txt
+-r requirements/dev.txt

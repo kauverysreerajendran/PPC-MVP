@@ -1,0 +1,240 @@
+# Local development stack. Hot reload, captured email, no published DB/Redis ports.
+name: acme-dev
+
+x-backend-env: &backend-env
+  env_file: [.env]
+
+networks:
+  edge:
+  internal:
+
+volumes:
+  postgres-data:
+  redis-data:
+  sap-postgres-data:
+  masterdata-postgres-data:
+  rack-postgres-data:
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on: [frontend, backend, sap-integration, masterdata, rack]
+    ports:
+      - "80:80"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/nginx/conf.d/dev.conf:/etc/nginx/conf.d/default.conf:ro
+    networks: [edge, internal]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    <<: *backend-env
+    command: npm run dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    expose: ["3000"]
+    networks: [internal]
+
+  backend:
+    build:
+      context: ./backend
+      target: dev
+    <<: *backend-env
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend:/app
+    expose: ["8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz').status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # --- SAP Integration microservice + its own database ---------------------
+  sap-integration:
+    build:
+      context: ./services/sap-integration
+      target: dev
+    <<: *backend-env
+    environment:
+      SAP_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@sap-postgres:5432/sap_db
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload"
+    volumes:
+      - ./services/sap-integration:/app
+    expose: ["8001"]
+    depends_on:
+      sap-postgres: {condition: service_healthy}
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/healthz').status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  sap-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: sap_db
+    volumes:
+      - sap-postgres-data:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d sap_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # --- Masterdata microservice + its own database ------------------------
+  masterdata:
+    build:
+      context: ./services/masterdata
+      target: dev
+    <<: *backend-env
+    environment:
+      MASTERDATA_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@masterdata-postgres:5432/masterdata
+      MASTERDATA_SAP_API_BASE_URL: http://sap-integration:8001/api/v1/sap
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload"
+    volumes:
+      - ./services/masterdata:/app
+    expose: ["8002"]
+    depends_on:
+      masterdata-postgres: {condition: service_healthy}
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8002/healthz').status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  masterdata-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: masterdata
+    volumes:
+      - masterdata-postgres-data:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d masterdata"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # --- Rack microservice + its own database -----------------------------
+  rack:
+    build:
+      context: ./services/rack
+      target: dev
+    <<: *backend-env
+    environment:
+      RACK_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@rack-postgres:5432/rack
+      RACK_MASTERDATA_API_BASE_URL: http://masterdata:8002/api/v1/masterdata
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload"
+    volumes:
+      - ./services/rack:/app
+    expose: ["8003"]
+    depends_on:
+      rack-postgres: {condition: service_healthy}
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8003/healthz').status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  rack-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: rack
+    volumes:
+      - rack-postgres-data:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d rack"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  celery-worker:
+    build:
+      context: ./backend
+      target: dev
+    <<: *backend-env
+    command: celery -A app.workers.celery_app worker -Q default,emails,maintenance -l info --concurrency 4
+    volumes:
+      - ./backend:/app
+    depends_on:
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+    networks: [internal]
+
+  celery-beat:
+    build:
+      context: ./backend
+      target: dev
+    <<: *backend-env
+    command: celery -A app.workers.celery_app beat -l info
+    volumes:
+      - ./backend:/app
+    depends_on:
+      redis: {condition: service_healthy}
+    networks: [internal]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - redis-data:/data
+      - ./infrastructure/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports:
+      - "8025:8025"
+    networks: [internal]
