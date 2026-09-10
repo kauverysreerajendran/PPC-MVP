@@ -25,7 +25,7 @@ ulid-py==1.1.*
 email-validator==2.2.*
 sentry-sdk==2.14.*
 # OpenTelemetry (inert unless OTEL_EXPORTER_OTLP_ENDPOINT is set)
-opentelemetry-sdk==1.27.*
+opentelemetry-sdk==1.44.*
 opentelemetry-instrumentation-fastapi==0.48b0
 opentelemetry-instrumentation-sqlalchemy==0.48b0
 opentelemetry-instrumentation-redis==0.48b0
