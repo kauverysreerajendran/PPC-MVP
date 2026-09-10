@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Inbox, Lock } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { Pagination } from "@/components/ui/Pagination";
+import { SearchBar } from "@/components/ui/SearchBar";
 import { useToast } from "@/components/ui/Toast";
 import { usePageSize } from "@/lib/usePageSize";
 import { ApiError } from "@/lib/api/errors";
@@ -21,6 +22,25 @@ import type { ListRecordsParams, SapInwardRecord } from "../types";
  * status cell is then read-only.
  */
 const DISPATCHED = "DISPATCHED";
+
+/** What each SAP movement type means — shown on hover of the "SAP" cell. */
+const MOVEMENT_INFO: Record<string, string> = {
+  "101": "Goods receipt against a purchase order",
+  "102": "Reversal of goods receipt for a purchase order",
+  "103": "Goods receipt into GR blocked stock",
+  "105": "Release from GR blocked stock to unrestricted",
+  "122": "Return delivery to vendor",
+  "123": "Reversal of return delivery to vendor",
+  "201": "Goods issue to a cost center",
+  "261": "Goods issue to a production order",
+  "262": "Reversal of goods issue to a production order",
+  "301": "Plant-to-plant transfer posting",
+  "311": "Storage-location transfer posting",
+  "321": "Transfer from quality inspection to unrestricted stock",
+  "501": "Goods receipt without a purchase order",
+  "601": "Goods issue for a delivery",
+  "641": "Transfer posting to stock in transit",
+};
 
 const cell = (row: SapInwardRecord, key: string) =>
   (row as unknown as Record<string, unknown>)[key];
@@ -46,7 +66,10 @@ function Chip({
 }) {
   const mod = typeof tone === "number" ? `ds-chip-${tone}` : tone ? `ds-chip-${tone}` : "";
   return (
-    <span className={`ds-chip ${mod}`.trim()} title={title}>
+    <span
+      className={`ds-chip ${mod}${title ? " cursor-help" : ""}`.trim()}
+      title={title}
+    >
       {icon}
       <span>{children}</span>
     </span>
@@ -114,9 +137,20 @@ export function SapUploadView() {
   const toast = useToast();
   const qc = useQueryClient();
 
+  // Live ("elastic") search — filters server-side as the user types.
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(query.trim()), 180);
+    return () => clearTimeout(t);
+  }, [query]);
+  useEffect(() => {
+    setPage(1);
+  }, [search]);
+
   const params = useMemo<ListRecordsParams>(
-    () => ({ page, page_size: PAGE_SIZE }),
-    [page, PAGE_SIZE],
+    () => ({ page, page_size: PAGE_SIZE, ...(search ? { search } : {}) }),
+    [page, PAGE_SIZE, search],
   );
 
   const records = useSapRecords(params);
@@ -165,7 +199,6 @@ export function SapUploadView() {
   async function patch(id: string, patchBody: { remark?: string }) {
     try {
       await updateRecord.mutateAsync({ id, patch: patchBody });
-      toast("success", "Record updated");
     } catch {
       toast("error", "Update failed");
     }
@@ -178,7 +211,6 @@ export function SapUploadView() {
     try {
       await patchOutwardByRef(ref, body);
       await qc.invalidateQueries({ queryKey: ["masterdata", "sap-outwards"] });
-      toast("success", "Saved");
       return true;
     } catch (err) {
       toast(
@@ -249,7 +281,12 @@ export function SapUploadView() {
             return <Chip tone={hueOf(String(v))}>{String(v)}</Chip>;
           }
           if (c.key === "movement_type") {
-            return <Chip tone={2}>{String(v)}</Chip>;
+            const meaning = MOVEMENT_INFO[String(v)] ?? "SAP movement type";
+            return (
+              <Chip tone={2} title={`SAP ${String(v)} — ${meaning}`}>
+                {String(v)}
+              </Chip>
+            );
           }
           if (c.type === "number") return fmtNum(v);
           return String(v);
@@ -313,6 +350,7 @@ export function SapUploadView() {
                 value={out.box_uid}
                 display={{ kind: "chip", tone: 0 }}
                 selectOnFocus
+                uppercase
                 onSave={(v) => patchOutward(out.sap_reference_id, { box_uid: v })}
               />
             );
@@ -370,7 +408,23 @@ export function SapUploadView() {
         headerVariant="solid"
         columnDividers
         stickyHeader={false}
-        emptyContent={<SapEmptyState />}
+        toolbar={
+          <SearchBar
+            value={query}
+            onChange={setQuery}
+            placeholder="Search DC, PO, model, vendor, batch…"
+            className="w-full max-w-md"
+          />
+        }
+        emptyContent={
+          search ? (
+            <div className="px-6 py-14 text-center text-sm text-text-secondary">
+              No records match “{search}”.
+            </div>
+          ) : (
+            <SapEmptyState />
+          )
+        }
         footer={
           <Pagination
             page={page}
@@ -392,6 +446,7 @@ function OutwardCell({
   optionLabel,
   display,
   selectOnFocus,
+  uppercase,
   onSave,
 }: {
   field: string;
@@ -401,6 +456,8 @@ function OutwardCell({
   display?: { kind: "chip" | "num"; tone: number };
   /** select all on focus so a barcode scan overwrites the current value */
   selectOnFocus?: boolean;
+  /** force the value to upper-case as it is typed (Box UID) */
+  uppercase?: boolean;
   onSave: (v: string | number | null) => void | boolean | Promise<void | boolean>;
 }) {
   const [editing, setEditing] = useState(false);
@@ -467,7 +524,7 @@ function OutwardCell({
       value={draft}
       onClick={(e) => e.stopPropagation()}
       onFocus={selectOnFocus ? (e) => e.currentTarget.select() : undefined}
-      onChange={(e) => setDraft(e.target.value)}
+      onChange={(e) => setDraft(uppercase ? e.target.value.toUpperCase() : e.target.value)}
       onBlur={() => void commit()}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
@@ -479,7 +536,9 @@ function OutwardCell({
           setEditing(false);
         }
       }}
-      className="h-8 w-32 rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2 text-xs text-text outline-none focus:border-primary"
+      className={`h-8 w-32 rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2 text-xs text-text outline-none focus:border-primary${
+        uppercase ? " uppercase" : ""
+      }`}
     />
   );
 }

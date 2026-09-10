@@ -23,7 +23,16 @@ import {
 } from "../hooks";
 import type { RackListParams, RackSlot } from "../types";
 
-const EMPTY = { rack_code: "", row_no: "", column_no: "", shelf_no: "", location_name: "", notes: "" };
+const EMPTY = {
+  warehouse_code: "",
+  aisle_code: "",
+  rack_code: "",
+  shelf_no: "",
+  row_no: "",
+  tray_no: "",
+  location_name: "",
+  notes: "",
+};
 
 export function RackView() {
   const [search, setSearch] = useState("");
@@ -79,10 +88,12 @@ export function RackView() {
   function openEdit(row: RackSlot) {
     setEditing(row);
     setForm({
+      warehouse_code: row.warehouse_code,
+      aisle_code: row.aisle_code,
       rack_code: row.rack_code,
-      row_no: String(row.row_no),
-      column_no: String(row.column_no),
       shelf_no: String(row.shelf_no),
+      row_no: String(row.row_no),
+      tray_no: String(row.tray_no),
       location_name: row.location_name ?? "",
       notes: row.notes ?? "",
     });
@@ -92,10 +103,12 @@ export function RackView() {
   async function submitForm() {
     const g = (k: string) => (form[k] ?? "").trim();
     const body: Record<string, unknown> = {
+      warehouse_code: g("warehouse_code"),
+      aisle_code: g("aisle_code"),
       rack_code: g("rack_code"),
-      row_no: Number(g("row_no")),
-      column_no: Number(g("column_no")),
       shelf_no: Number(g("shelf_no")),
+      row_no: Number(g("row_no")),
+      tray_no: Number(g("tray_no")),
     };
     if (g("location_name")) body.location_name = g("location_name");
     if (g("notes")) body.notes = g("notes");
@@ -129,15 +142,17 @@ export function RackView() {
   }
 
   const columns: Column<RackSlot>[] = [
+    { key: "warehouse_code", header: "Warehouse", render: (r) => r.warehouse_code },
+    { key: "aisle_code", header: "Aisle", render: (r) => r.aisle_code },
     { key: "rack_code", header: "Rack", render: (r) => r.rack_code },
     {
-      key: "location_name",
+      key: "code",
       header: "Location",
-      render: (r) => r.location_name ?? <span className="text-text-muted">—</span>,
+      render: (r) => <span className="font-mono text-xs">{r.code}</span>,
     },
-    { key: "row_no", header: "Row", align: "right", render: (r) => r.row_no },
-    { key: "column_no", header: "Col", align: "right", render: (r) => r.column_no },
     { key: "shelf_no", header: "Shelf", align: "right", render: (r) => r.shelf_no },
+    { key: "row_no", header: "Row", align: "right", render: (r) => r.row_no },
+    { key: "tray_no", header: "Tray", align: "right", render: (r) => r.tray_no },
     {
       key: "occupied",
       header: "Occupied",
@@ -214,9 +229,9 @@ export function RackView() {
 
   const SORTS = [
     ["rack_code", "Rack"],
-    ["row_no", "Row"],
-    ["column_no", "Col"],
     ["shelf_no", "Shelf"],
+    ["row_no", "Row"],
+    ["tray_no", "Tray"],
     ["occupied_by_model", "Model No"],
     ["date_of_occupied", "Occupied On"],
   ] as const;
@@ -322,6 +337,18 @@ export function RackView() {
       >
         <div className="grid gap-3 sm:grid-cols-2">
           <Input
+            label="Warehouse Code"
+            required
+            value={form.warehouse_code ?? ""}
+            onChange={(e) => setForm((f) => ({ ...f, warehouse_code: e.target.value }))}
+          />
+          <Input
+            label="Aisle Code"
+            required
+            value={form.aisle_code ?? ""}
+            onChange={(e) => setForm((f) => ({ ...f, aisle_code: e.target.value }))}
+          />
+          <Input
             label="Rack Code"
             required
             value={form.rack_code ?? ""}
@@ -333,25 +360,27 @@ export function RackView() {
             onChange={(e) => setForm((f) => ({ ...f, location_name: e.target.value }))}
           />
           <Input
-            label="Row No"
-            type="number"
-            required
-            value={form.row_no ?? ""}
-            onChange={(e) => setForm((f) => ({ ...f, row_no: e.target.value }))}
-          />
-          <Input
-            label="Column No"
-            type="number"
-            required
-            value={form.column_no ?? ""}
-            onChange={(e) => setForm((f) => ({ ...f, column_no: e.target.value }))}
-          />
-          <Input
             label="Shelf No"
             type="number"
             required
             value={form.shelf_no ?? ""}
             onChange={(e) => setForm((f) => ({ ...f, shelf_no: e.target.value }))}
+          />
+          <Input
+            label="Row No"
+            type="number"
+            required
+            hint="Vertical position within the shelf"
+            value={form.row_no ?? ""}
+            onChange={(e) => setForm((f) => ({ ...f, row_no: e.target.value }))}
+          />
+          <Input
+            label="Tray No"
+            type="number"
+            required
+            hint="Horizontal position within the row"
+            value={form.tray_no ?? ""}
+            onChange={(e) => setForm((f) => ({ ...f, tray_no: e.target.value }))}
           />
           <Input
             label="Notes"
@@ -367,7 +396,7 @@ export function RackView() {
         title="Occupy Slot"
         description={
           occupyFor
-            ? `${occupyFor.rack_code} · ${occupyFor.location_name ?? ""} (r${occupyFor.row_no}/c${occupyFor.column_no}/s${occupyFor.shelf_no})`
+            ? `${occupyFor.code} · ${occupyFor.location_name ?? ""}`
             : undefined
         }
         footer={

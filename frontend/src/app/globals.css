@@ -445,6 +445,115 @@ main::-webkit-scrollbar-thumb,
   color: color-mix(in srgb, var(--ds-chip, var(--color-primary)) 66%, var(--color-text));
 }
 
+/* --------------------------------------------------------------------------
+ * Boot loader — first-paint buffering for full page loads / browser refresh
+ * ------------------------------------------------------------------------ */
+#ds-boot {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* frosted glass over whatever has painted so far — not a flat wall */
+  background: color-mix(in srgb, var(--color-bg, #f4f6f8) 55%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.15);
+  backdrop-filter: blur(12px) saturate(1.15);
+  transition: opacity 0.4s ease;
+}
+#ds-boot[data-done="1"] {
+  opacity: 0;
+  pointer-events: none;
+}
+#ds-boot .ds-boot-bar {
+  position: fixed;
+  top: 0;
+  left: -40%;
+  height: 3px;
+  width: 40%;
+  background: var(--color-primary, #0d9488);
+  box-shadow: 0 0 10px var(--color-primary, #0d9488);
+  animation: ds-boot-slide 1s ease-in-out infinite;
+}
+#ds-boot .ds-boot-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.25rem 1.75rem;
+  border-radius: var(--radius-lg, 12px);
+  border: 1px solid color-mix(in srgb, var(--color-border, #e2e8f0) 70%, transparent);
+  background: color-mix(in srgb, var(--color-surface, #fff) 82%, transparent);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgba(0, 0, 0, 0.12));
+}
+#ds-boot .ds-boot-boxes {
+  width: 2.5rem;
+  height: 2.5rem;
+  color: var(--color-primary, #0d9488);
+}
+#ds-boot .ds-boot-box {
+  transform-origin: center;
+  animation: ds-boot-pop 1.25s ease-in-out infinite;
+}
+#ds-boot .ds-boot-box.b2 { animation-delay: 0.14s; }
+#ds-boot .ds-boot-box.b3 { animation-delay: 0.28s; }
+#ds-boot .ds-boot-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary, #555);
+}
+@keyframes ds-boot-slide {
+  0% { left: -40%; }
+  50% { left: 30%; }
+  100% { left: 100%; }
+}
+@keyframes ds-boot-pop {
+  0%, 100% { transform: scale(0.55); opacity: 0.3; }
+  40% { transform: scale(1); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #ds-boot .ds-boot-bar,
+  #ds-boot .ds-boot-box { animation-duration: 2.4s; }
+}
+
+/* --------------------------------------------------------------------------
+ * SweetAlert2 — themed to match the design system (light + dark)
+ * ------------------------------------------------------------------------ */
+.swal2-container { z-index: 500; }
+.swal2-popup {
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-lg);
+  font-size: 0.9rem;
+}
+.swal2-title {
+  color: var(--color-text) !important;
+  font-size: 1.05rem !important;
+  font-weight: 600 !important;
+}
+.swal2-html-container { color: var(--color-text-secondary) !important; font-size: 0.85rem !important; }
+.swal2-actions { gap: 0.5rem; }
+.swal2-confirm {
+  background: var(--color-primary) !important;
+  color: var(--color-primary-fg) !important;
+  border-radius: var(--radius-sm) !important;
+  padding: 0.5rem 1.1rem !important;
+  font-weight: 600 !important;
+  box-shadow: none !important;
+}
+.swal2-confirm:hover { background: var(--color-primary-hover) !important; }
+.swal2-cancel {
+  background: var(--color-surface-2) !important;
+  color: var(--color-text) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: var(--radius-sm) !important;
+  padding: 0.5rem 1.1rem !important;
+  font-weight: 500 !important;
+}
+.swal2-timer-progress-bar { background: color-mix(in srgb, var(--color-primary) 45%, transparent) !important; }
+
 /* Indeterminate network-activity bar — a sliver that sweeps left→right */
 @keyframes ds-net-sweep {
   0% {

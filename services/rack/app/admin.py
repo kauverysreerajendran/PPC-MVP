@@ -14,7 +14,7 @@ from starlette.requests import Request
 
 from app.config import settings
 from app.db import engine
-from app.models import Rack
+from app.models import Rack, RackMaster
 
 ADMIN_BASE_URL = "/rack-admin"
 
@@ -37,16 +37,41 @@ class _Auth(AuthenticationBackend):
         return request.session.get("rack_admin") == "1"
 
 
+class RackMasterAdmin(ModelView, model=RackMaster):
+    name = "Rack Master"
+    name_plural = "Rack Masters"
+    column_list = [
+        RackMaster.warehouse_code,
+        RackMaster.aisle_code,
+        RackMaster.rack_code,
+        RackMaster.position,
+        RackMaster.side,
+        RackMaster.shelf_count,
+        RackMaster.row_count,
+        RackMaster.tray_count,
+        RackMaster.status,
+    ]
+    column_searchable_list = [
+        RackMaster.warehouse_code,
+        RackMaster.aisle_code,
+        RackMaster.rack_code,
+    ]
+    column_default_sort = ("position", False)
+    page_size = 50
+
+
 class RackAdmin(ModelView, model=Rack):
     name = "Rack Slot"
     name_plural = "Rack Slots"
     column_list = [
+        Rack.warehouse_code,
+        Rack.aisle_code,
         Rack.rack_code,
-        Rack.location_name,
-        Rack.row_no,
-        Rack.column_no,
         Rack.shelf_no,
-        Rack.occupied,
+        Rack.row_no,
+        Rack.tray_no,
+        Rack.location_name,
+        Rack.slot_state,
         Rack.occupied_by_model,
         Rack.date_of_occupied,
         Rack.status,
@@ -68,4 +93,5 @@ def init_admin(app: FastAPI) -> None:
         title="Rack DB Admin",
         authentication_backend=_Auth(secret_key=settings.SECRET_KEY),
     )
+    admin.add_view(RackMasterAdmin)
     admin.add_view(RackAdmin)

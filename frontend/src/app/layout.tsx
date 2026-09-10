@@ -4,6 +4,7 @@ import { Inter } from "next/font/google";
 import { publicEnv } from "@/config/env";
 import { Providers } from "./providers";
 import { ThemeScript } from "@/components/ThemeScript";
+import { BootLoader } from "@/components/BootLoader";
 import { RouteProgress } from "@/components/shell/RouteProgress";
 import "./globals.css";
 
@@ -23,6 +24,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="en" className={inter.variable}>
       <body>
         <ThemeScript />
+        <BootLoader />
         <RouteProgress />
         <Providers>{children}</Providers>
       </body>

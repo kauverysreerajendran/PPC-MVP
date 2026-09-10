@@ -419,13 +419,15 @@ async def _validate_master_refs(session: AsyncSession, data: dict[str, Any]) -> 
 
     box_uid = data.get("box_uid")
     if box_uid:
-        exists = await session.scalar(
-            select(m.Box.id).where(
+        canonical = await session.scalar(
+            select(m.Box.box_uid).where(
                 func.lower(m.Box.box_uid) == box_uid.lower(), m.Box.status == "active"
             )
         )
-        if exists is None:
+        if canonical is None:
             raise ConflictError(f"box_uid '{box_uid}' is not registered in the Boxes master")
+        # store the master's canonical spelling (Box UIDs are upper-case)
+        data["box_uid"] = canonical
 
     tray_id = data.get("tray_id")
     if tray_id:

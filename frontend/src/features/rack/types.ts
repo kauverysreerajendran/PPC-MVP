@@ -6,14 +6,20 @@ export interface Page<T> {
 }
 
 export type RackStatus = "active" | "inactive";
+export type SlotState = "empty" | "occupied" | "reserved" | "blocked";
 
 export interface RackSlot {
   id: string;
+  warehouse_code: string;
+  aisle_code: string;
   rack_code: string;
-  row_no: number;
-  column_no: number;
   shelf_no: number;
+  row_no: number;
+  tray_no: number;
+  /** canonical location code, e.g. K-S4-R2-T05 */
+  code: string;
   location_name: string | null;
+  slot_state: SlotState;
   occupied: boolean;
   occupied_by_model: string | null;
   date_of_occupied: string | null;
@@ -30,7 +36,10 @@ export interface RackListParams {
   sort?: string;
   direction?: "asc" | "desc";
   status?: RackStatus;
+  warehouse_code?: string;
+  aisle_code?: string;
   rack_code?: string;
+  slot_state?: SlotState;
   occupied?: boolean;
   occupied_by_model?: string;
 }
