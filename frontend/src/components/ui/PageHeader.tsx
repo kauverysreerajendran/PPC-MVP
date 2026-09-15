@@ -42,7 +42,7 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="mb-5 flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="ds-animate-fade-up mb-5 flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-end sm:justify-between">
       <div className="space-y-1">
         {breadcrumbs ? <Breadcrumb items={breadcrumbs} /> : null}
         <h1 className="text-xl font-semibold">{title}</h1>

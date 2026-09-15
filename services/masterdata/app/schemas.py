@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import math
 import uuid
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    computed_field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 T = TypeVar("T")
 
@@ -263,9 +273,243 @@ class SapOutwardOut(ORMModel):
     created_at: datetime
     updated_at: datetime
 
-    @field_serializer("quantity")
+    # --- SAP inward (receiving) ---
+    received_pieces: int = 0
+    received_qty: Decimal | None = None
+    inward_status: str | None = None
+    inward_last_scan_at: datetime | None = None
+    #: receiving entries — read by the computed quantities below, never serialised
+    #: (the scan list has its own endpoint)
+    inward_scans: list[dict] | None = Field(default=None, exclude=True)
+
+    @field_serializer("quantity", "received_qty")
     def _ser_quantity(self, v: Decimal | None) -> int | float | None:
         return _clean_number(v)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def expected_pieces(self) -> int:
+        """Front + back come back attached as one piece, so the expected piece
+        count is the front-case count (== back-case). Falls back through
+        no_of_trays/2 then 1."""
+        for n in (self.front_case_trays, self.back_case_trays):
+            if n and n > 0:
+                return int(n)
+        if self.no_of_trays and self.no_of_trays > 0:
+            return max(1, (int(self.no_of_trays) + 1) // 2)
+        return 1
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def qty_per_piece(self) -> int | None:
+        """Whole parts in a regular piece (see :func:`split_lot`)."""
+        split = split_lot(self.quantity, self.expected_pieces)
+        return split[0] if split else None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def extra_qty_pieces(self) -> int:
+        """How many of the first pieces carry one extra part (see :func:`split_lot`)."""
+        split = split_lot(self.quantity, self.expected_pieces)
+        return split[1] if split else 0
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def shortage_pieces(self) -> int:
+        return self.expected_pieces - int(self.received_pieces or 0)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def rejected_qty(self) -> float | int:
+        """QED-rejected quantity entered on SAP Inward (0 when none was entered)."""
+        return _clean_number(qty_entry_total(self.inward_scans, "rejected_qty")) or 0
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def shortage_qty(self) -> float | int | None:
+        """Lot − received − QED rejected."""
+        if self.quantity is None:
+            return None
+        recv = self.received_qty or Decimal(0)
+        rejected = qty_entry_total(self.inward_scans, "rejected_qty")
+        return _clean_number((self.quantity - recv - rejected).quantize(Decimal("0.001")))
+
+
+#: ``entry_mode`` of an ``inward_scans`` entry holding entered quantities
+#: (accepted / rejected) rather than one scanned piece.
+QTY_ENTRY = "qty"
+
+
+def qty_entries(scans: list[dict] | None) -> list[dict]:
+    """The quantity-entry entries of a line's ``inward_scans``."""
+    return [sc for sc in scans or [] if sc.get("entry_mode") == QTY_ENTRY]
+
+
+def qty_entry_total(scans: list[dict] | None, key: str) -> Decimal:
+    """Sum of ``key`` (``accepted_qty`` / ``rejected_qty``) over the quantity entries."""
+    return sum(
+        (Decimal(str(sc.get(key) or 0)) for sc in qty_entries(scans)), Decimal(0)
+    )
+
+
+def split_lot(quantity: Decimal | None, pieces: int) -> tuple[int, int] | None:
+    """Split a lot into whole parts per piece: ``(base, extra)``.
+
+    Parts are never fractional, so a lot of 467 over 19 pieces is 24 per piece
+    with the first 11 pieces carrying 25 — every running total is a whole
+    number and all pieces together add up to the lot.
+    """
+    if quantity is None or pieces <= 0:
+        return None
+    whole = int(quantity)
+    return whole // pieces, whole % pieces
+
+
+def piece_qty(quantity: Decimal | None, pieces: int, piece_no: int) -> int | None:
+    """Whole parts carried by piece number ``piece_no`` (1-based)."""
+    split = split_lot(quantity, pieces)
+    if split is None:
+        return None
+    base, extra = split
+    return base + (1 if piece_no <= extra else 0)
+
+
+def received_qty_for(
+    quantity: Decimal | None, pieces: int, received_pieces: int
+) -> Decimal | None:
+    """Whole parts received after ``received_pieces`` scans; the full lot once
+    every expected piece is in."""
+    split = split_lot(quantity, pieces)
+    if quantity is None or split is None:
+        return None
+    if received_pieces >= pieces:
+        return quantity
+    base, extra = split
+    return Decimal(base * received_pieces + min(received_pieces, extra))
+
+
+def pieces_for_accepted(quantity: Decimal | None, pieces: int, accepted: Decimal) -> int:
+    """Pieces implied by an entered accepted quantity.
+
+    ``ceil(accepted / qty_per_piece)`` using the whole-part split of the lot
+    (:func:`split_lot`), at least 1 when anything was accepted and never more
+    than the expected ``pieces``. Lot 300 over 4 pieces is 75 per piece, so
+    accepted 150 → 2 pieces. Nothing accepted → 0 pieces.
+    """
+    if accepted <= 0:
+        return 0
+    split = split_lot(quantity, pieces)
+    per = split[0] if split and split[0] > 0 else 1
+    return min(pieces, max(1, math.ceil(accepted / per)))
+
+
+# --- sap inward (receiving) --------------------------------------------
+InwardStatus =Literal["PENDING", "PARTIAL", "RECEIVED", "SHORT", "OVER"]
+
+
+class SapInwardScanIn(BaseModel):
+    """Scan one received piece. The Box UID resolves the outward line; PO / DC,
+    when supplied, must match it.
+
+    With ``accepted_qty`` the scan instead records the quantities from the
+    vendor mail / QED sheet for the whole line (see ``sap_inward_scan``)."""
+
+    box_uid: Str1
+    po_no: str | None = Field(default=None, max_length=64)
+    dc_no: str | None = Field(default=None, max_length=64)
+    scanned_by: str | None = Field(default=None, max_length=64)
+    accepted_qty: Decimal | None = Field(default=None, ge=0)
+    rejected_qty: Decimal | None = Field(default=None, ge=0)
+
+    @field_validator("accepted_qty")
+    @classmethod
+    def _accepted_splits_front_back(cls, v: Decimal | None) -> Decimal | None:
+        if v is None:
+            return v
+        if v != v.to_integral_value():
+            raise ValueError("Accepted qty must be a whole number")
+        if int(v) % 2:
+            raise ValueError("Accepted qty must split equally into front and back cases")
+        return v
+
+    @field_validator("rejected_qty")
+    @classmethod
+    def _rejected_whole(cls, v: Decimal | None) -> Decimal | None:
+        if v is not None and v != v.to_integral_value():
+            raise ValueError("QED rejected qty must be a whole number")
+        return v
+
+    @model_validator(mode="after")
+    def _rejected_needs_accepted(self) -> SapInwardScanIn:
+        if self.rejected_qty is not None and self.accepted_qty is None:
+            raise ValueError("QED rejected qty can only be sent with the accepted qty")
+        return self
+
+
+class SapInwardScanOut(ORMModel):
+    id: uuid.UUID
+    sap_outward_id: uuid.UUID
+    box_uid: str | None
+    po_no: str | None
+    dc_no: str | None
+    piece_no: int
+    qty: Decimal | None
+    scanned_by: str | None
+    scanned_at: datetime
+
+    @field_serializer("qty")
+    def _ser_qty(self, v: Decimal | None) -> int | float | None:
+        return _clean_number(v)
+
+
+class SapInwardScanResult(BaseModel):
+    """What a scan tells the operator, in one payload."""
+
+    matched: bool
+    message: str
+    scan: SapInwardScanOut | None = None
+    outward: SapOutwardOut | None = None
+
+
+class SapInwardCloseIn(BaseModel):
+    note: str | None = Field(default=None, max_length=255)
+
+
+# The four inward receipts checked before a line is verified, in the order
+# their tags appear on the Status-service note.
+INWARD_DOCUMENTS: dict[str, str] = {
+    "gi_slip": "GI",
+    "titan_challan": "DC",
+    "vendor_challan": "VDC",
+    "qed_sheet": "QED",
+}
+InwardDocument = Literal["gi_slip", "titan_challan", "vendor_challan", "qed_sheet"]
+
+
+class SapInwardVerifyIn(BaseModel):
+    """Documents the operator confirmed in the Verify window. When a body is
+    sent, every one of the four must be listed."""
+
+    documents_checked: list[InwardDocument] = Field(max_length=len(INWARD_DOCUMENTS))
+
+    @field_validator("documents_checked")
+    @classmethod
+    def _all_documents(cls, v: list[str]) -> list[str]:
+        missing = [d for d in INWARD_DOCUMENTS if d not in v]
+        if missing:
+            raise ValueError(f"every document must be checked; missing: {', '.join(missing)}")
+        return v
+
+
+class StatusLineOut(BaseModel):
+    """A line's status at one stage, as recorded by the Status service."""
+
+    sap_reference_id: str
+    stage: str
+    code: str
+    label: str
+    tone: str
+    changed_at: datetime
 
 
 # --- trays --------------------------------------------------------------
@@ -335,6 +579,16 @@ class OutwardStatusMasterOut(ORMModel):
     sort_order: int
     is_default: bool
     is_dispatched: bool
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class MovementTypeMasterOut(ORMModel):
+    id: uuid.UUID
+    code: str
+    description: str
+    sort_order: int
     status: str
     created_at: datetime
     updated_at: datetime

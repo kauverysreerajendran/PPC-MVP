@@ -14,7 +14,9 @@ log = get_logger("app.access")
 
 class RequestContextMiddleware:
     """Assigns request/correlation IDs, emits one structured access log per request,
-    and echoes X-Request-ID back to the client. Pure ASGI for low overhead."""
+    echoes X-Request-ID back to the client and adds ``Server-Timing: app;dur=<ms>``
+    (docs/10 §7) so the browser can separate server time from network time.
+    Pure ASGI for low overhead."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -39,6 +41,8 @@ class RequestContextMiddleware:
                 status_holder["status"] = message["status"]
                 message.setdefault("headers", [])
                 message["headers"].append((b"x-request-id", request_id.encode()))
+                dur_ms = (time.perf_counter() - start) * 1000
+                message["headers"].append((b"server-timing", f"app;dur={dur_ms:.1f}".encode()))
             await send(message)
 
         try:

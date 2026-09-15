@@ -73,6 +73,9 @@ class RackAdmin(ModelView, model=Rack):
         Rack.location_name,
         Rack.slot_state,
         Rack.occupied_by_model,
+        Rack.qty,
+        Rack.lot_no,
+        Rack.sap_reference_id,
         Rack.date_of_occupied,
         Rack.status,
     ]
@@ -80,6 +83,8 @@ class RackAdmin(ModelView, model=Rack):
         Rack.rack_code,
         Rack.location_name,
         Rack.occupied_by_model,
+        Rack.lot_no,
+        Rack.sap_reference_id,
     ]
     column_default_sort = ("rack_code", False)
     page_size = 50

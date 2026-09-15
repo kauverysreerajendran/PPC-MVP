@@ -12,14 +12,17 @@ Every master resource exposes the same REST surface:
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models as m
 from app import schemas as s
+from app import status_client
 from app.crud import CrudRepository
 from app.db import get_session
 from app.errors import ConflictError, NotFoundError
@@ -154,6 +157,10 @@ class ListParams:
         sort: str = Query("created_at"),
         direction: str = Query("desc", pattern="^(asc|desc)$"),
         status: s.Status | None = Query(None, description="filter by row status"),
+        with_total: bool = Query(
+            True,
+            description="false = skip the COUNT(*) (lookup fetches); total then equals the page length",
+        ),
     ) -> None:
         self.page = page
         self.page_size = page_size
@@ -161,6 +168,7 @@ class ListParams:
         self.sort = sort
         self.direction = direction
         self.status = status
+        self.with_total = with_total
 
 
 ListDep = Annotated[ListParams, Depends(ListParams)]
@@ -183,6 +191,7 @@ async def _page(
         sort=p.sort,
         direction=p.direction,
         filters=filters,
+        with_total=p.with_total,
     )
     return {
         "items": [out.model_validate(r) for r in rows],
@@ -480,11 +489,17 @@ async def _assert_box_uid_unique(
 
 
 def _assert_box_uid_not_locked(row: m.SapOutward, data: dict[str, Any]) -> None:
-    """Once a line is DISPATCHED its Box UID is frozen."""
+    """Once a dispatched line has a Box UID, that UID is frozen.
+
+    Lines start DISPATCHED (revision 0021), so an empty Box UID must still be
+    settable — only a UID already entered is locked.
+    """
     if "box_uid" not in data:
         return
-    if row.outward_status == "DISPATCHED" and (data.get("box_uid") or None) != (
-        row.box_uid or None
+    if (
+        row.box_uid
+        and row.outward_status == "DISPATCHED"
+        and (data.get("box_uid") or None) != row.box_uid
     ):
         raise ConflictError(
             "This outward line is already dispatched — its Box UID is locked."
@@ -502,34 +517,25 @@ def _auto_outward_status(data: dict[str, Any]) -> str | None:
     return data.get("outward_status")
 
 
-async def _sync_outward_status(
-    session: AsyncSession,
+def _sync_outward_status(
     row: m.SapOutward,
     new_status: str,
     *,
     note: str | None = None,
 ) -> None:
-    """Upsert the authoritative ``sap_outward_statuses`` row and mirror it onto
-    the denormalised ``sap_outwards.outward_status`` column."""
-    existing = await session.scalar(
-        select(m.SapOutwardStatus).where(m.SapOutwardStatus.sap_outward_id == row.id)
-    )
-    if (
-        existing is not None
-        and existing.status == "DISPATCHED"
-        and new_status != "DISPATCHED"
-    ):
+    """Move the outward line's status, enforcing the one-way DISPATCHED rule.
+
+    Before revision 0020 this upserted a 1:1 ``sap_outward_statuses`` row and
+    mirrored the value onto ``sap_outwards.outward_status``. The two never
+    disagreed, so the satellite table was folded in: the column is now the only
+    copy and the note lives beside it.
+    """
+    if row.outward_status == "DISPATCHED" and new_status != "DISPATCHED":
         raise ConflictError("a dispatched outward line cannot change status")
 
     row.outward_status = new_status
-    if existing is None:
-        session.add(
-            m.SapOutwardStatus(sap_outward_id=row.id, status=new_status, note=note)
-        )
-    else:
-        existing.status = new_status
-        if note is not None:
-            existing.note = note
+    if note is not None:
+        row.outward_status_note = note
 
 
 @router.get(
@@ -547,6 +553,22 @@ async def list_outward_status_master(session: Session, _u: User) -> Any:
     return [s.OutwardStatusMasterOut.model_validate(r) for r in rows]
 
 
+@router.get(
+    "/movement-type-master",
+    response_model=list[s.MovementTypeMasterOut],
+    tags=["sap-outwards"],
+)
+async def list_movement_type_master(session: Session, _u: User) -> Any:
+    """The SAP movement-type lookup (code → description) — used to explain the
+    ``SAP`` column on the SAP Upload screen."""
+    rows = (
+        await session.scalars(
+            select(m.MovementTypeMaster).order_by(m.MovementTypeMaster.sort_order.asc())
+        )
+    ).all()
+    return [s.MovementTypeMasterOut.model_validate(r) for r in rows]
+
+
 @router.get("/sap-outwards", response_model=s.Page[s.SapOutwardOut], tags=["sap-outwards"])
 async def list_sap_outwards(
     session: Session,
@@ -559,6 +581,7 @@ async def list_sap_outwards(
     tray_id: str | None = Query(None),
     tray_type: str | None = Query(None),
     outward_status: str | None = Query(None),
+    inward_status: str | None = Query(None),
 ) -> Any:
     return await _page(
         outwards_repo,
@@ -573,6 +596,7 @@ async def list_sap_outwards(
             "tray_id": tray_id,
             "tray_type": tray_type,
             "outward_status": outward_status,
+            "inward_status": inward_status,
         },
     )
 
@@ -591,8 +615,8 @@ async def create_sap_outward(
     await _validate_master_refs(session, data)
     await _assert_box_uid_unique(session, data.get("box_uid"))
     row = await outwards_repo.create(session, payload)
-    # Every outward line gets a status row from the start (NEW = "Yet to Dispatch").
-    await _sync_outward_status(session, row, _auto_outward_status(data) or "NEW")
+    # Every outward line starts with a status: lines arrive already dispatched.
+    _sync_outward_status(row, _auto_outward_status(data) or "DISPATCHED")
     await session.flush()
     return s.SapOutwardOut.model_validate(row)
 
@@ -613,7 +637,7 @@ async def update_sap_outward(
     await _assert_box_uid_unique(session, data.get("box_uid"), exclude_id=obj_id)
     row = await outwards_repo.update(session, obj_id, payload)
     if (auto := _auto_outward_status(data)) is not None:
-        await _sync_outward_status(session, row, auto)
+        _sync_outward_status(row, auto)
         await session.flush()
     return s.SapOutwardOut.model_validate(row)
 
@@ -642,7 +666,7 @@ async def patch_sap_outward_by_ref(
             continue  # status is derived, never set directly — see _sync_outward_status
         setattr(row, key, value)
     if (auto := _auto_outward_status(data)) is not None:
-        await _sync_outward_status(session, row, auto)
+        _sync_outward_status(row, auto)
     await session.flush()
     return s.SapOutwardOut.model_validate(row)
 
@@ -652,6 +676,397 @@ async def patch_sap_outward_by_ref(
 )
 async def delete_sap_outward(obj_id: uuid.UUID, session: Session, _u: User) -> None:
     await outwards_repo.soft_delete(session, obj_id)
+
+
+# ========================== sap inward =================================
+_INWARD_SEARCH = (
+    m.SapOutward.box_uid,
+    m.SapOutward.dc_no,
+    m.SapOutward.po_no,
+    m.SapOutward.model_no,
+    m.SapOutward.batch_no,
+    m.SapOutward.lot_no,
+    m.SapOutward.sap_reference_id,
+)
+
+
+@router.get(
+    "/sap-inward/lines", response_model=s.Page[s.SapOutwardOut], tags=["sap-inward"]
+)
+async def list_sap_inward_lines(
+    session: Session,
+    _u: User,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    search: str | None = Query(None),
+    inward_status: str | None = Query(None),
+) -> Any:
+    """Only the outward lines that a Box UID has actually been scanned against
+    (i.e. receiving has started). The SAP Inward grid stays empty until then."""
+    stmt = select(m.SapOutward).where(
+        m.SapOutward.status == "active",
+        or_(
+            m.SapOutward.received_pieces > 0,
+            m.SapOutward.inward_status.is_not(None),
+        ),
+    )
+    if inward_status:
+        stmt = stmt.where(m.SapOutward.inward_status == inward_status)
+    if search:
+        like = f"%{search.strip()}%"
+        stmt = stmt.where(or_(*(c.ilike(like) for c in _INWARD_SEARCH)))
+
+    total = await session.scalar(
+        select(func.count()).select_from(stmt.subquery())
+    ) or 0
+    stmt = (
+        stmt.order_by(m.SapOutward.inward_last_scan_at.desc().nullslast())
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+    )
+    rows = (await session.scalars(stmt)).all()
+    return {
+        "items": [s.SapOutwardOut.model_validate(r) for r in rows],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+def _scan_out(sap_outward_id: uuid.UUID, scan: dict[str, Any]) -> s.SapInwardScanOut:
+    """One entry of ``sap_outwards.inward_scans`` in the wire shape the API has
+    always returned. ``sap_outward_id`` is the parent's id — it used to be a
+    stored FK column before revision 0020 folded the table in."""
+    return s.SapInwardScanOut.model_validate({**scan, "sap_outward_id": sap_outward_id})
+
+
+def _recompute_inward(row: m.SapOutward) -> None:
+    """Roll the running receiving tally up onto the outward line."""
+    if s.qty_entries(row.inward_scans):
+        # Entered quantities: received_qty is the accepted qty the operator
+        # entered — keep it (the piece count was derived from it, not the other
+        # way round). Accounted for in full only when accepted + rejected = lot.
+        rejected = s.qty_entry_total(row.inward_scans, "rejected_qty")
+        accounted = (row.received_qty or Decimal(0)) + rejected
+        row.inward_status = (
+            "RECEIVED"
+            if row.quantity is not None and accounted == row.quantity
+            else "PARTIAL"
+        )
+        return
+    out = s.SapOutwardOut.model_validate(row)
+    expected = out.expected_pieces
+    pieces = int(row.received_pieces or 0)
+    if row.quantity is not None:
+        # Whole parts only — never a fractional share of the lot.
+        row.received_qty = s.received_qty_for(row.quantity, expected, pieces)
+    if pieces == 0:
+        row.inward_status = "PENDING"
+    elif pieces < expected:
+        row.inward_status = "PARTIAL"
+    elif pieces == expected:
+        row.inward_status = "RECEIVED"
+    else:
+        row.inward_status = "OVER"
+
+
+@router.post(
+    "/sap-inward/scan",
+    response_model=s.SapInwardScanResult,
+    tags=["sap-inward"],
+)
+async def sap_inward_scan(
+    payload: s.SapInwardScanIn, session: Session, user: User
+) -> Any:
+    """Register one received front+back piece for the outward line that carries
+    this Box UID. PO / DC, if supplied, must match that line."""
+    box = payload.box_uid.strip()
+    row = await session.scalar(
+        select(m.SapOutward)
+        .where(m.SapOutward.box_uid == box, m.SapOutward.status == "active")
+        .limit(1)
+    )
+    if row is None:
+        return s.SapInwardScanResult(
+            matched=False, message=f"No outward line for Box UID '{box}'."
+        )
+    if payload.po_no and row.po_no and payload.po_no.strip() != row.po_no:
+        return s.SapInwardScanResult(
+            matched=False,
+            message=f"Box '{box}' belongs to PO {row.po_no}, not {payload.po_no.strip()}.",
+        )
+    if payload.dc_no and row.dc_no and payload.dc_no.strip() != row.dc_no:
+        return s.SapInwardScanResult(
+            matched=False,
+            message=f"Box '{box}' belongs to DC {row.dc_no}, not {payload.dc_no.strip()}.",
+        )
+
+    if payload.accepted_qty is not None:
+        return await _record_qty_entry(row, payload, box, session, user)
+
+    expected = s.SapOutwardOut.model_validate(row).expected_pieces
+    piece_no = int(row.received_pieces or 0) + 1
+    per = s.piece_qty(row.quantity, expected, piece_no)
+    scanned_at = datetime.now(UTC)
+    scan = {
+        "id": str(uuid.uuid4()),
+        "box_uid": box,
+        "po_no": row.po_no,
+        "dc_no": row.dc_no,
+        "piece_no": piece_no,
+        "qty": str(per) if per is not None else None,
+        "scanned_by": user.subject or None,
+        "scanned_at": scanned_at.isoformat(),
+    }
+    # Replace the list, never append in place: a plain JSONB column has no
+    # mutation tracking, so an in-place append would never be flushed.
+    row.inward_scans = [*(row.inward_scans or []), scan]
+    row.received_pieces = piece_no
+    row.inward_last_scan_at = scanned_at
+    _recompute_inward(row)
+    await session.flush()
+
+    # A scanned box moves the line on in the Status service: outward → Received
+    # (it leaves SAP Outward's open list) and inward → Yet to verify — again, if
+    # more pieces arrive after a Verify. Repeats are no-ops there. If the Status
+    # service refuses, this request fails and the scan above rolls back.
+    await status_client.report(
+        [
+            status_client.event(
+                row.sap_reference_id, "outward", "RECEIVED", actor=user.subject or None
+            ),
+            status_client.event(
+                row.sap_reference_id,
+                "inward",
+                "YET_TO_VERIFY",
+                actor=user.subject or None,
+                note=f"piece {piece_no}/{expected} scanned",
+            ),
+        ]
+    )
+
+    out = s.SapOutwardOut.model_validate(row)
+    over = piece_no > expected
+    msg = (
+        f"{row.model_no or 'lot'} · piece {piece_no}/{expected}"
+        + (" — OVER expected!" if over else "")
+        + (
+            f" · received {out.received_qty} of {row.quantity}"
+            f" · shortage {out.shortage_qty}"
+            if row.quantity is not None
+            else ""
+        )
+    )
+    return s.SapInwardScanResult(
+        matched=True,
+        message=msg,
+        scan=_scan_out(row.id, scan),
+        outward=out,
+    )
+
+
+async def _record_qty_entry(
+    row: m.SapOutward,
+    payload: s.SapInwardScanIn,
+    box: str,
+    session: AsyncSession,
+    user: Principal,
+) -> s.SapInwardScanResult:
+    """Record the accepted / QED-rejected quantities for the whole line.
+
+    The quantities come from the vendor mail / QED sheet. Accepted splits
+    equally into front and back cases and is the received quantity; shortage
+    is lot − accepted − rejected. The piece-based parts of the app (receiving
+    status, rack placement one piece per tray) still need a piece count, so
+    ``received_pieces`` is derived with :func:`schemas.pieces_for_accepted`:
+    ``ceil(accepted / qty_per_piece)``, min 1, max ``expected_pieces``.
+    One entry per line — a second one is refused until the line is Reset.
+    """
+    if row.quantity is None:
+        raise ConflictError(
+            f"Box '{box}' has no lot quantity, so the accepted qty cannot be checked. "
+            "Scan the pieces instead."
+        )
+    if s.qty_entries(row.inward_scans):
+        raise ConflictError(
+            f"The accepted qty for box '{box}' is already recorded. "
+            "Reset the line on SAP Inward to enter it again."
+        )
+    accepted = payload.accepted_qty or Decimal(0)
+    rejected = payload.rejected_qty or Decimal(0)
+    if accepted + rejected > row.quantity:
+        raise ConflictError(
+            f"Accepted {s._clean_number(accepted)} + rejected {s._clean_number(rejected)} "
+            f"is more than the lot qty {s._clean_number(row.quantity)}. "
+            "Check the vendor mail / QED sheet and enter it again."
+        )
+
+    expected = s.SapOutwardOut.model_validate(row).expected_pieces
+    pieces = s.pieces_for_accepted(row.quantity, expected, accepted)
+    half = accepted / 2
+    scanned_at = datetime.now(UTC)
+    entry = {
+        "id": str(uuid.uuid4()),
+        "box_uid": box,
+        "po_no": row.po_no,
+        "dc_no": row.dc_no,
+        "piece_no": pieces,
+        "qty": str(accepted),
+        "scanned_by": user.subject or None,
+        "scanned_at": scanned_at.isoformat(),
+        "accepted_qty": str(accepted),
+        "rejected_qty": str(rejected),
+        "front_cases": str(half),
+        "back_cases": str(half),
+        "entry_mode": s.QTY_ENTRY,
+    }
+    # Replace the list, never mutate in place (see sap_inward_scan).
+    row.inward_scans = [*(row.inward_scans or []), entry]
+    row.received_pieces = pieces
+    row.received_qty = accepted
+    row.inward_last_scan_at = scanned_at
+    _recompute_inward(row)
+    await session.flush()
+
+    out = s.SapOutwardOut.model_validate(row)
+    n = s._clean_number
+    await status_client.report(
+        [
+            status_client.event(
+                row.sap_reference_id, "outward", "RECEIVED", actor=user.subject or None
+            ),
+            status_client.event(
+                row.sap_reference_id,
+                "inward",
+                "YET_TO_VERIFY",
+                actor=user.subject or None,
+                note=(
+                    f"accepted {n(accepted)} ({n(half)}F/{n(half)}B) · rejected {n(rejected)}"
+                    f" · shortage {out.shortage_qty} of {n(row.quantity)}"
+                ),
+            ),
+        ]
+    )
+    return s.SapInwardScanResult(
+        matched=True,
+        message=(
+            f"{row.model_no or 'lot'} · accepted {n(accepted)} "
+            f"({n(half)} front / {n(half)} back) · rejected {n(rejected)}"
+            f" · shortage {out.shortage_qty} of {n(row.quantity)}"
+        ),
+        scan=_scan_out(row.id, entry),
+        outward=out,
+    )
+
+
+@router.post(
+    "/sap-inward/{obj_id}/close",
+    response_model=s.SapOutwardOut,
+    tags=["sap-inward"],
+)
+async def sap_inward_close(
+    obj_id: uuid.UUID, payload: s.SapInwardCloseIn, session: Session, _u: User
+) -> Any:
+    """Finalise receiving: RECEIVED if all pieces are in, else SHORT."""
+    row = await outwards_repo.get(session, obj_id)
+    expected = s.SapOutwardOut.model_validate(row).expected_pieces
+    row.inward_status = (
+        "RECEIVED" if int(row.received_pieces or 0) >= expected else "SHORT"
+    )
+    await session.flush()
+    return s.SapOutwardOut.model_validate(row)
+
+
+@router.post(
+    "/sap-inward/{obj_id}/reset",
+    response_model=s.SapOutwardOut,
+    tags=["sap-inward"],
+)
+async def sap_inward_reset(obj_id: uuid.UUID, session: Session, user: User) -> Any:
+    """Wipe the receiving tally and every scan for this line — and put its
+    statuses back: outward → Dispatched, inward → Not received."""
+    row = await outwards_repo.get(session, obj_id)
+    row.inward_scans = []
+    row.received_pieces = 0
+    row.received_qty = None
+    row.inward_status = None
+    row.inward_last_scan_at = None
+    await session.flush()
+    await status_client.report(
+        [
+            status_client.event(
+                row.sap_reference_id,
+                "outward",
+                "DISPATCHED",
+                actor=user.subject or None,
+                note="receiving reset",
+            ),
+            status_client.event(
+                row.sap_reference_id,
+                "inward",
+                "NOT_RECEIVED",
+                actor=user.subject or None,
+                note="receiving reset",
+            ),
+        ]
+    )
+    return s.SapOutwardOut.model_validate(row)
+
+
+# Status service stores the event note as String(255).
+_STATUS_NOTE_MAX = 255
+
+
+@router.post(
+    "/sap-inward/{obj_id}/verify",
+    response_model=s.StatusLineOut,
+    tags=["sap-inward"],
+)
+async def sap_inward_verify(
+    obj_id: uuid.UUID,
+    session: Session,
+    user: User,
+    payload: s.SapInwardVerifyIn | None = None,
+) -> Any:
+    """The operator checked the received quantities: inward status → Verified.
+
+    With a body, the four inward receipts confirmed in the Verify window are
+    appended to the Status-service note; without one the note is unchanged.
+    Scanning more pieces afterwards moves the line back to Yet to verify."""
+    row = await outwards_repo.get(session, obj_id)
+    if not row.received_pieces:
+        raise ConflictError("Nothing has been received on this line yet — scan a box first.")
+    out = s.SapOutwardOut.model_validate(row)
+    note = (
+        f"{row.received_pieces}/{out.expected_pieces} pieces · "
+        f"received {out.received_qty} of {out.quantity}"
+    )
+    if payload is not None:
+        suffix = " · docs: " + " ".join(f"{tag} ✓" for tag in s.INWARD_DOCUMENTS.values())
+        note = note[: _STATUS_NOTE_MAX - len(suffix)] + suffix
+    changes = await status_client.report(
+        [
+            status_client.event(
+                row.sap_reference_id,
+                "inward",
+                "VERIFIED",
+                actor=user.subject or None,
+                note=note,
+            )
+        ]
+    )
+    return changes[0]["line"]
+
+
+@router.get(
+    "/sap-inward/{obj_id}/scans",
+    response_model=list[s.SapInwardScanOut],
+    tags=["sap-inward"],
+)
+async def sap_inward_scans(obj_id: uuid.UUID, session: Session, _u: User) -> Any:
+    row = await outwards_repo.get(session, obj_id)
+    scans = sorted(row.inward_scans or [], key=lambda sc: sc.get("piece_no") or 0)
+    return [_scan_out(row.id, sc) for sc in scans]
 
 
 # ============================= trays ====================================

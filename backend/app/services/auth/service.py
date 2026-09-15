@@ -147,7 +147,9 @@ class AuthService:
     async def _issue_tokens(
         self, user: User, *, family_id: str, ip: str | None, user_agent: str | None
     ) -> RefreshResult:
-        access = create_access_token(subject=str(user.id), role=user.role)
+        access = create_access_token(
+            subject=str(user.id), role=user.role, email=user.email, name=user.full_name
+        )
         raw_refresh = generate_refresh_token()
         expires_at = datetime.now(UTC) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
         await self.tokens.add(

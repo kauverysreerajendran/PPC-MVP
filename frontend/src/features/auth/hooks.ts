@@ -29,9 +29,10 @@ export function useLogin() {
         // Client navigation: the store is already seeded with the access token
         // from the login response, and the middleware mints the RSC access-token
         // cookie from the just-set refresh cookie on the way to /dashboard.
-        // router.refresh() drops any stale router cache from before sign-in.
+        // No router.refresh(): the dashboard layout reads cookies(), so it is
+        // dynamic and never served from the router cache — a refresh only
+        // rendered the whole server tree a second time.
         router.replace("/dashboard");
-        router.refresh();
       } catch (err) {
         setPhase("idle");
         if (err instanceof ApiError) {

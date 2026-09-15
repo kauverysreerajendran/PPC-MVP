@@ -10,6 +10,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 
+from app.status_client import StatusServiceError
+
 log = logging.getLogger("masterdata.errors")
 
 
@@ -44,6 +46,15 @@ def init_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
             content=_body("conflict", exc.message, status.HTTP_409_CONFLICT),
+        )
+
+    @app.exception_handler(StatusServiceError)
+    async def _status_unavailable(_: Request, exc: StatusServiceError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=_body(
+                "status_service_unavailable", exc.message, status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
         )
 
     @app.exception_handler(IntegrityError)

@@ -49,8 +49,38 @@ def test_rack_locator_surface() -> None:
         f"{PREFIX}/racks/{{rack_code}}",
         f"{PREFIX}/locate",
         f"{PREFIX}/resolve",
+        f"{PREFIX}/find",
+        f"{PREFIX}/allocate",
     ):
         assert path in paths, f"{path} missing from the published API"
+
+
+def test_allocation_helpers() -> None:
+    import random
+    from decimal import Decimal
+
+    from app import allocation as a
+
+    # a lot quantity always splits back to itself
+    parts = a._split_qty(Decimal("231"), 20)
+    assert len(parts) == 20
+    assert sum(parts) == Decimal("231.000")
+    parts = a._split_qty(Decimal("27"), 4)
+    assert sum(parts) == Decimal("27.000")
+    assert a._split_qty(None, 3) == [None, None, None]
+
+    # front-case trays come from front rows, back-case from back rows
+    class _Slot:
+        def __init__(self, row_no: int) -> None:
+            self.row_no = row_no
+
+    wh = a._Warehouse(random.Random(1))
+    for _ in range(10):
+        wh.add(_Slot(1), row_count=4)  # front
+        wh.add(_Slot(4), row_count=4)  # back
+    picked = wh.take(want_front=3, want_back=2, want_any=0)
+    assert sum(1 for s in picked if s.row_no == 1) == 3
+    assert sum(1 for s in picked if s.row_no == 4) == 2
 
 
 def test_health_endpoint_registered() -> None:
@@ -176,3 +206,72 @@ def test_crud_repo_defaults() -> None:
     )
     assert repo.unique_fields == ()
     assert repo.default_sort == "rack_code"
+
+
+def test_place_received_pieces_marks_the_line_placed(monkeypatch) -> None:
+    """Two pieces derived from an accepted qty go into two trays → Placed."""
+    import uuid
+    from datetime import datetime, timezone
+
+    from fastapi.testclient import TestClient
+
+    from app import api
+    from app.db import get_session
+    from app.security import Principal, current_principal
+
+    now = datetime(2026, 9, 14, tzinfo=timezone.utc)
+    slots = {
+        uuid.UUID(int=n): Rack(
+            id=uuid.UUID(int=n), warehouse_code="CBFC", aisle_code="A1", rack_code="K",
+            shelf_no=1, row_no=1, tray_no=n, location_name=None, slot_state="empty",
+            occupied=False, occupied_by_model=None, date_of_occupied=None, qty=None,
+            lot_no=None, sap_reference_id=None, placement_source=None, notes=None,
+            status="active", created_at=now, updated_at=now,
+        )
+        for n in (1, 2)
+    }
+    reported: list[dict] = []
+
+    class FakeSession:
+        async def scalar(self, _stmt):
+            return 0  # nothing placed yet
+
+        async def get(self, _model, obj_id, with_for_update=False):
+            return slots.get(obj_id)
+
+        async def flush(self):
+            return None
+
+    async def fake_session():
+        yield FakeSession()
+
+    async def known(_model_no):
+        return True
+
+    async def fake_report(events):
+        reported.extend(events)
+        return []
+
+    monkeypatch.setattr(api, "model_exists", known)
+    monkeypatch.setattr(api, "report_status", fake_report)
+    app.dependency_overrides[get_session] = fake_session
+    app.dependency_overrides[current_principal] = lambda: Principal(subject="dev", role=None)
+    try:
+        resp = TestClient(app).post(
+            f"{PREFIX}/place",
+            json={
+                "sap_reference_id": "SAP-2",
+                "model_no": "90148",
+                "lot_no": "LOT-2",
+                "received_pieces": 2,
+                "pieces": [{"slot_id": str(sid), "qty": 75} for sid in slots],
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert (body["rack_status"], body["placed_now"], body["placed_total"]) == ("PLACED", 2, 2)
+    assert all(slot.occupied and slot.qty == 75 for slot in slots.values())
+    assert reported[0]["code"] == "PLACED"
+    assert reported[0]["note"] == "2 of 2 received pieces in racks"

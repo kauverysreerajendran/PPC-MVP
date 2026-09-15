@@ -2,13 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Hourglass } from "lucide-react";
 
 /**
  * Global navigation buffering indicator.
  *
- * Shows a thin top progress bar (and, for slower loads, a centered hourglass
- * card) whenever the user navigates between pages or hard-refreshes the app.
+ * A single thin top progress bar for every page transition and hard refresh —
+ * the only other buffering state in the app is <BootLoader/>'s full-screen
+ * "Getting things ready…" overlay, reserved for the true first paint.
  *
  * App Router exposes no router events, so navigation *start* is detected by
  * intercepting same-document link clicks and patching `history.pushState`;
@@ -19,7 +19,6 @@ export function RouteProgress() {
   const pathname = usePathname();
   const [visible, setVisible] = useState(false);
   const [pct, setPct] = useState(0);
-  const [showHourglass, setShowHourglass] = useState(false);
 
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const trickle = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -39,13 +38,10 @@ export function RouteProgress() {
     running.current = true;
     clearTimers();
     setVisible(true);
-    setShowHourglass(false);
     setPct(8);
     trickle.current = setInterval(() => {
       setPct((p) => (p >= 90 ? p : p + Math.max(0.5, (90 - p) * 0.08)));
     }, 200);
-    // Only escalate to the hourglass overlay when the load is genuinely slow.
-    timers.current.push(setTimeout(() => setShowHourglass(true), 450));
   }
 
   function done() {
@@ -53,7 +49,6 @@ export function RouteProgress() {
     running.current = false;
     clearTimers();
     setPct(100);
-    setShowHourglass(false);
     timers.current.push(setTimeout(() => setVisible(false), 220));
     timers.current.push(setTimeout(() => setPct(0), 460));
   }
@@ -63,6 +58,53 @@ export function RouteProgress() {
     done();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
+
+  // Safety net for <BootLoader/>'s #ds-boot overlay: its own inline <script>
+  // only runs when the browser parses it as part of a real document load. A
+  // client-side `router.refresh()` (e.g. right after login) re-streams the
+  // root layout's Server Component output and can reinsert that markup fresh
+  // via RSC DOM patching — which does *not* re-execute the script — so the
+  // overlay is left stuck at opacity 1 forever, blocking the whole app. A
+  // MutationObserver fires on any insertion method, so it clears the overlay
+  // no matter how the node arrived.
+  useEffect(() => {
+    const clear = (el: Element) => {
+      if (el.getAttribute("data-done") === "1") return;
+      el.setAttribute("data-done", "1");
+      setTimeout(() => el.parentNode?.removeChild(el), 450);
+    };
+    // Same semantics as BootLoader's inline script: dismiss as soon as the
+    // document is parsed and React can hydrate — not after every image and
+    // font has finished downloading (docs/08 §1.4).
+    const clearWhenReady = (el: Element) => {
+      if (document.readyState !== "loading") clear(el);
+      else document.addEventListener("DOMContentLoaded", () => clear(el), { once: true });
+    };
+
+    const existing = document.getElementById("ds-boot");
+    if (existing) clearWhenReady(existing);
+
+    // BootLoader's markup is a direct child of <body> (app/layout.tsx), so only
+    // body's own child list needs watching. `subtree: false` means this callback
+    // runs when something is appended to <body> itself (rare: the boot overlay
+    // reinserted by an RSC refresh, a portal) — never on the table re-renders
+    // deeper in the tree that the old `subtree: true` observer reacted to on
+    // every poll (docs/05 §5.6, docs/08 §1).
+    const observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          if (node.id === "ds-boot") clearWhenReady(node);
+          else {
+            const nested = node.querySelector?.("#ds-boot");
+            if (nested) clearWhenReady(nested);
+          }
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: false });
+    return () => observer.disconnect();
+  }, []);
 
   // Hard refresh / first paint: run the bar until the document is ready.
   useEffect(() => {
@@ -97,7 +139,11 @@ export function RouteProgress() {
         const url = args[2];
         if (url) {
           const next = new URL(url, window.location.href);
-          if (next.pathname !== window.location.pathname) start();
+          // Next's App Router can call pushState from inside a
+          // useInsertionEffect during a transition; scheduling a state update
+          // synchronously from there throws. Defer to a microtask so `start()`
+          // always runs after React's insertion-effect phase has flushed.
+          if (next.pathname !== window.location.pathname) queueMicrotask(start);
         }
         return original.apply(this, args);
       };
@@ -122,29 +168,11 @@ export function RouteProgress() {
   if (!visible) return null;
 
   return (
-    <>
+    <div aria-hidden className="pointer-events-none fixed inset-x-0 top-0 z-[200] h-0.5">
       <div
-        aria-hidden
-        className="pointer-events-none fixed inset-x-0 top-0 z-[200] h-0.5"
-      >
-        <div
-          className="h-full bg-primary shadow-[0_0_8px_var(--color-primary)] transition-[width,opacity] duration-200 ease-out"
-          style={{ width: `${pct}%`, opacity: pct >= 100 ? 0 : 1 }}
-        />
-      </div>
-
-      {showHourglass && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="ds-animate-fade pointer-events-none fixed inset-0 z-[199] flex items-center justify-center"
-        >
-          <div className="ds-animate-scale flex flex-col items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-surface/95 px-6 py-5 shadow-[var(--shadow-lg)] backdrop-blur-sm">
-            <Hourglass className="ds-hourglass size-6 text-primary" />
-            <span className="text-xs text-text-secondary">Loading…</span>
-          </div>
-        </div>
-      )}
-    </>
+        className="h-full bg-primary shadow-[0_0_8px_var(--color-primary)] transition-[width,opacity] duration-200 ease-out"
+        style={{ width: `${pct}%`, opacity: pct >= 100 ? 0 : 1 }}
+      />
+    </div>
   );
 }

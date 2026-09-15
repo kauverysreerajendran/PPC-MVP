@@ -1,17 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { LocateFixed, RefreshCw, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ArrowLeft, LocateFixed, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { PageHeader } from "@/components/ui/PageHeader";
 import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { useToast } from "@/components/ui/Toast";
+import { WaveBanner } from "@/components/ui/WaveBanner";
 import { ApiError } from "@/lib/api/errors";
 import { cn } from "@/lib/cn";
 import { useLocate, useRackDetail, useResolveLocation, useTopology } from "../hooks";
 import type {
   LocateResult,
+  Placement,
   RackSummary,
   Recommendation,
   SelectedLocation,
@@ -20,6 +22,9 @@ import { AisleMap } from "./AisleMap";
 import { EmptyLocationRecommendation } from "./EmptyLocationRecommendation";
 import { LocationBreadcrumb, type LocationCrumb } from "./LocationBreadcrumb";
 import { LocationSummary } from "./LocationSummary";
+import { ModelPlacements } from "./ModelPlacements";
+import { PendingPlacementsStrip } from "./placement/PendingPlacementsStrip";
+import { PlacementFlow } from "./placement/PlacementFlow";
 import { RackCard } from "./RackCard";
 import { RackDetailView } from "./RackDetail";
 import { RackOverview } from "./RackOverview";
@@ -40,11 +45,20 @@ export function RackLocatorView() {
   const [selected, setSelected] = useState<SelectedLocation | null>(null);
   const [locateResult, setLocateResult] = useState<LocateResult | null>(null);
   const [query, setQuery] = useState("");
+  const [findQuery, setFindQuery] = useState<string | null>(null);
 
   const toast = useToast();
   const topology = useTopology();
   const locate = useLocate();
   const resolve = useResolveLocation();
+
+  // Arrived here from a "Rack" button elsewhere (e.g. the SAP grids):
+  // ?q=<model / lot / location> — jump straight to it and offer a Back button.
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const urlQuery = searchParams.get("q");
+  const [cameFromLink, setCameFromLink] = useState(false);
+  const didUrlSearch = useRef(false);
 
   const warehouses = useMemo(
     () => topology.data?.warehouses ?? [],
@@ -83,6 +97,10 @@ export function RackLocatorView() {
       : null,
   );
 
+  const activeRowCount =
+    detail.data?.row_count ??
+    racks.find((r) => r.rack_code === rackCode)?.row_count;
+
   function openRack(rack: RackSummary) {
     setWarehouse(rack.warehouse_code);
     setAisle(rack.aisle_code);
@@ -106,14 +124,14 @@ export function RackLocatorView() {
     });
   }
 
-  async function runLocate() {
+  async function runLocate(limit = 6) {
     if (!warehouse) return;
     try {
       const result = await locate.mutateAsync({
         warehouse_code: warehouse,
         ...(aisle ? { aisle_code: aisle } : {}),
         ...(rackCode ? { rack_code: rackCode } : {}),
-        limit: 6,
+        limit,
       });
       setLocateResult(result);
       const best = result.recommendations[0];
@@ -124,13 +142,17 @@ export function RackLocatorView() {
     }
   }
 
-  async function runSearch() {
-    const q = query.trim();
+  const CODE_RE = /^[A-Za-z0-9]+[-/ ]?s\d+[-/ ]?r\d+[-/ ]?t\d+$/i;
+
+  async function runSearch(term?: string) {
+    const q = (term ?? query).trim();
     if (!q) return;
+    if (term && term !== query) setQuery(term);
     try {
       const result = await resolve.mutateAsync({ q });
       if (!result.matched || !result.slot) {
         toast("info", `Nothing found for "${q}"`);
+        setFindQuery(null);
         return;
       }
       const slot = result.slot;
@@ -147,10 +169,57 @@ export function RackLocatorView() {
         code: slot.code,
         id: slot.id,
         state: slot.slot_state,
+        occupied_by_model: slot.occupied_by_model,
+        qty: slot.qty,
+        lot_no: slot.lot_no,
+        sap_reference_id: slot.sap_reference_id,
       });
+      // a plain location code points at exactly one tray; a model / lot / SAP
+      // reference can sit in many — show all of them.
+      setFindQuery(CODE_RE.test(q) ? null : q);
     } catch (err) {
       toast("error", err instanceof ApiError ? err.displayMessage : "Search failed");
     }
+  }
+
+  function takePlacement(p: Placement) {
+    setWarehouse(p.warehouse_code);
+    setAisle(p.aisle_code);
+    setRackCode(p.rack_code);
+    setSelected({
+      warehouse_code: p.warehouse_code,
+      aisle_code: p.aisle_code,
+      rack_code: p.rack_code,
+      shelf_no: p.shelf_no,
+      row_no: p.row_no,
+      tray_no: p.tray_no,
+      code: p.code,
+      id: p.id,
+      state: "occupied",
+      occupied_by_model: p.occupied_by_model,
+      qty: p.qty,
+      lot_no: p.lot_no,
+      sap_reference_id: p.sap_reference_id,
+    });
+  }
+
+  // run the ?q= search once the topology is in, exactly once per mount
+  useEffect(() => {
+    if (didUrlSearch.current || !urlQuery || warehouses.length === 0) return;
+    didUrlSearch.current = true;
+    setCameFromLink(true);
+    setQuery(urlQuery);
+    void runSearch(urlQuery);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlQuery, warehouses.length]);
+
+  // ?place=<SAP outward line id> from SAP Inward's "Place in rack" button:
+  // rendered entirely by PlacementFlow (see the early return below) — the
+  // normal locator layout underneath is untouched.
+  const placeId = searchParams.get("place");
+
+  function selectTray(loc: SelectedLocation) {
+    setSelected(loc);
   }
 
   const crumbs: LocationCrumb[] = [];
@@ -186,6 +255,9 @@ export function RackLocatorView() {
     });
   }
 
+  // ?place=<id>: the dedicated three-step placement screen, nothing else.
+  if (placeId) return <PlacementFlow placeId={placeId} />;
+
   if (topology.isLoading && !topology.data) return <PageSkeleton />;
   if (topology.isError) {
     return (
@@ -197,36 +269,42 @@ export function RackLocatorView() {
   }
 
   // recommendations belonging to the rack currently drawn, for in-rack markers
-  const rackRecommendations =
+  const rackRecommendations: Recommendation[] =
     locateResult?.recommendations.filter((r) => r.rack_code === rackCode) ?? [];
 
   return (
     <div>
-      <PageHeader
+      <WaveBanner
+        breadcrumb={[{ label: "Warehouse" }, { label: "Rack Locator" }]}
         title="Rack Locator"
-        description="Find and assign the nearest empty tray in real time."
-        breadcrumbs={[{ label: "Warehouse" }, { label: "Rack Locator" }]}
+        subtitle="Find and assign the nearest empty tray in real time."
         actions={
           <>
+            {cameFromLink ? (
+              <Button variant="secondary" size="sm" onClick={() => router.back()}>
+                <ArrowLeft className="size-3.5" />
+                Back
+              </Button>
+            ) : null}
             <Button
               variant="ghost"
               size="sm"
               onClick={() => void topology.refetch()}
               title="Refresh from the database"
             >
-              <RefreshCw className={cn("size-3.5", topology.isFetching && "animate-spin")} />
+              <RefreshCw
+                className={cn("size-3.5", topology.isFetching && "animate-spin")}
+              />
               Refresh
-            </Button>
-            <Button size="sm" loading={locate.isPending} onClick={runLocate}>
-              <LocateFixed className="size-4" />
-              Locate Me
             </Button>
           </>
         }
       />
 
+      <PendingPlacementsStrip />
+
       {/* filters — options come from the topology, never a hardcoded list */}
-      <div className="mb-4 flex flex-wrap items-end gap-2">
+      <div className="mb-5 flex flex-wrap items-end gap-3 rounded-[var(--radius-lg)] border border-border bg-surface p-4 shadow-[var(--shadow-sm)]">
         <Field label="Warehouse">
           <select
             value={warehouse}
@@ -235,6 +313,7 @@ export function RackLocatorView() {
               setAisle("");
               setRackCode(null);
               setSelected(null);
+              setLocateResult(null);
             }}
             className={SELECT_CLASS}
           >
@@ -253,6 +332,7 @@ export function RackLocatorView() {
               setAisle(e.target.value);
               setRackCode(null);
               setSelected(null);
+              setLocateResult(null);
             }}
             className={SELECT_CLASS}
           >
@@ -282,7 +362,7 @@ export function RackLocatorView() {
           </select>
         </Field>
 
-        <Field label="Find a location or model" className="min-w-[220px] flex-1">
+        <Field label="Find a location or model" className="min-w-[200px] flex-1">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-text-muted" />
             <input
@@ -298,71 +378,101 @@ export function RackLocatorView() {
           </div>
         </Field>
 
-        <Button variant="secondary" size="md" loading={resolve.isPending} onClick={runSearch}>
+        <Button
+          variant="secondary"
+          size="md"
+          loading={resolve.isPending}
+          onClick={() => void runSearch()}
+        >
           Find
+        </Button>
+
+        <Button
+          size="md"
+          className="ml-auto"
+          loading={locate.isPending}
+          onClick={() => void runLocate()}
+        >
+          <LocateFixed className="size-4" />
+          Locate Me
         </Button>
       </div>
 
       {crumbs.length > 0 ? <LocationBreadcrumb crumbs={crumbs} className="mb-3" /> : null}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-        <div className="min-w-0 space-y-4">
+      <div className="grid gap-4 lg:grid-cols-[164px_minmax(0,1fr)_290px]">
+        {/* racks in the active aisle — always in view */}
+        <aside className="self-start rounded-[var(--radius-lg)] border border-border bg-surface p-2 shadow-[var(--shadow-sm)] lg:sticky lg:top-4">
+          <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+            Aisle {activeAisle?.aisle_code ?? "—"}
+          </h2>
+          <p className="mt-0.5 px-1 text-[10px] tabular-nums text-text-muted">
+            {activeAisle ? pct(activeAisle.occupancy.availability_pct) : "—"} free ·{" "}
+            {activeAisle ? num(activeAisle.occupancy.empty) : 0} trays
+          </p>
+          <div className="mt-1.5 max-h-[520px] space-y-px overflow-y-auto">
+            {racks.map((rack) => (
+              <RackCard
+                key={rack.id}
+                rack={rack}
+                compact
+                active={rack.rack_code === rackCode}
+                onOpen={openRack}
+              />
+            ))}
+          </div>
+        </aside>
+
+        {/* centre stage */}
+        <div className="min-w-0">
           {!rackCode ? (
             activeAisle ? (
-              <AisleMap aisle={activeAisle} onOpen={openRack} />
+              <AisleMap
+                aisle={activeAisle}
+                activeRackCode={rackCode ?? undefined}
+                onOpen={openRack}
+              />
             ) : (
               <RackOverview topology={topology.data!} onOpen={openRack} />
             )
+          ) : detail.isError ? (
+            <ErrorState
+              title={`Unable to load rack ${rackCode}`}
+              onRetry={() => void detail.refetch()}
+            />
+          ) : detail.data ? (
+            <RackDetailView
+              detail={detail.data}
+              selected={selected}
+              recommendations={rackRecommendations}
+              onSelect={selectTray}
+            />
           ) : (
-            <div className="grid gap-3 lg:grid-cols-[184px_minmax(0,1fr)]">
-              {/* the aisle stays visible while you work inside one rack */}
-              <aside className="hidden overflow-hidden rounded-[var(--radius-md)] border border-border bg-surface lg:block">
-                <header className="border-b border-border px-3 py-2">
-                  <h3 className="text-xs font-semibold">Racks in Aisle {aisle}</h3>
-                  <p className="mt-0.5 text-[10px] tabular-nums text-text-muted">
-                    {activeAisle ? pct(activeAisle.occupancy.availability_pct) : "—"} available ·{" "}
-                    {activeAisle ? num(activeAisle.occupancy.empty) : 0} trays
-                  </p>
-                </header>
-                <div className="max-h-[560px] overflow-y-auto py-1">
-                  {racks.map((rack) => (
-                    <RackCard
-                      key={rack.id}
-                      rack={rack}
-                      compact
-                      active={rack.rack_code === rackCode}
-                      onOpen={openRack}
-                    />
-                  ))}
-                </div>
-              </aside>
-
-              {detail.isError ? (
-                <ErrorState
-                  title={`Unable to load rack ${rackCode}`}
-                  onRetry={() => void detail.refetch()}
-                />
-              ) : detail.data ? (
-                <RackDetailView
-                  detail={detail.data}
-                  selected={selected}
-                  recommendations={rackRecommendations}
-                  onSelect={setSelected}
-                />
-              ) : (
-                <PageSkeleton />
-              )}
-            </div>
+            <PageSkeleton />
           )}
         </div>
 
+        {/* selection + recommendations */}
         <aside className="space-y-4">
-          <LocationSummary selected={selected} onCleared={() => setSelected(null)} />
+          <LocationSummary
+            selected={selected}
+            rowCount={activeRowCount}
+            onCleared={() => setSelected(null)}
+          />
+          {findQuery ? (
+            <ModelPlacements
+              query={findQuery}
+              selectedCode={selected?.code}
+              onPick={takePlacement}
+              onClose={() => setFindQuery(null)}
+            />
+          ) : null}
           <EmptyLocationRecommendation
             result={locateResult}
             selectedCode={selected?.code}
             loading={locate.isPending}
             onSelect={takeRecommendation}
+            onMore={() => void runLocate(24)}
           />
         </aside>
       </div>

@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { sapApi } from "./api";
 import type { ListRecordsParams, RecordUpdate } from "./types";
+import { transactionalQueryOptions, usePollingInterval } from "@/lib/polling";
 
 const keys = {
   all: ["sap"] as const,
@@ -12,13 +13,12 @@ const keys = {
 };
 
 export function useSapRecords(params: ListRecordsParams = {}) {
+  const interval = usePollingInterval();
   return useQuery({
     queryKey: keys.records(params),
     queryFn: ({ signal }) => sapApi.listRecords(params, { signal }),
-    staleTime: 2_000,
-    refetchInterval: 5_000,
-    refetchIntervalInBackground: false,
     placeholderData: (prev) => prev,
+    ...transactionalQueryOptions(interval),
   });
 }
 

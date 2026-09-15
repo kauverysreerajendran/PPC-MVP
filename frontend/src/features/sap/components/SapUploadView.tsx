@@ -1,17 +1,24 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { Inbox, Lock } from "lucide-react";
+import { Inbox, Lock, MapPin } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { Pagination } from "@/components/ui/Pagination";
-import { SearchBar } from "@/components/ui/SearchBar";
 import { useToast } from "@/components/ui/Toast";
 import { usePageSize } from "@/lib/usePageSize";
 import { ApiError } from "@/lib/api/errors";
+import { cn } from "@/lib/cn";
+import { useSearchStore } from "@/stores/search";
+import { useLineStatuses } from "@/features/status/hooks";
+import type { StatusToneName } from "@/features/status/types";
 import { patchOutwardByRef } from "@/features/masterdata/api";
-import { useMdList, useOutwardStatusMaster } from "@/features/masterdata/hooks";
+import { useMdList, useMovementTypeMaster, useOutwardStatusMaster } from "@/features/masterdata/hooks";
 import type { Box, SapOutward, Vendor } from "@/features/masterdata/types";
+import { OutwardDocumentHover } from "./OutwardDocumentHover";
+import { OutwardDocumentModal } from "./receipts/OutwardDocumentModal";
+import { vendorLabel, type OutwardDocKind } from "./receipts/types";
 import { SapPageBanner } from "./SapPageBanner";
 import { useSapRecords, useUpdateSapRecord } from "../hooks";
 import type { ListRecordsParams, SapInwardRecord } from "../types";
@@ -23,25 +30,6 @@ import type { ListRecordsParams, SapInwardRecord } from "../types";
  */
 const DISPATCHED = "DISPATCHED";
 
-/** What each SAP movement type means — shown on hover of the "SAP" cell. */
-const MOVEMENT_INFO: Record<string, string> = {
-  "101": "Goods receipt against a purchase order",
-  "102": "Reversal of goods receipt for a purchase order",
-  "103": "Goods receipt into GR blocked stock",
-  "105": "Release from GR blocked stock to unrestricted",
-  "122": "Return delivery to vendor",
-  "123": "Reversal of return delivery to vendor",
-  "201": "Goods issue to a cost center",
-  "261": "Goods issue to a production order",
-  "262": "Reversal of goods issue to a production order",
-  "301": "Plant-to-plant transfer posting",
-  "311": "Storage-location transfer posting",
-  "321": "Transfer from quality inspection to unrestricted stock",
-  "501": "Goods receipt without a purchase order",
-  "601": "Goods issue for a delivery",
-  "641": "Transfer posting to stock in transit",
-};
-
 const cell = (row: SapInwardRecord, key: string) =>
   (row as unknown as Record<string, unknown>)[key];
 
@@ -52,26 +40,88 @@ function hueOf(s: string): number {
   return h % 8;
 }
 
+/** 0–7 = categorical hue; named tones = state (warning = pending, orange = action needed). */
+type ChipTone = number | "muted" | "success" | "warning" | "orange";
+
+/** Status-service tone → grid chip tone (chips have no "info" / "danger" of their own). */
+const CHIP_TONE: Record<StatusToneName, ChipTone> = {
+  neutral: "muted",
+  info: 0,
+  success: "success",
+  warning: "warning",
+  orange: "orange",
+  danger: 3,
+  progress: 2,
+};
+
+type OutwardTab = "open" | "completed";
+
+/**
+ * Open = dispatched lines not yet received; Completed = received. The split is
+ * the outward stage held by the Status service, applied server-side.
+ */
+const outwardSplit = (tab: OutwardTab) =>
+  ({
+    status_stage: "outward",
+    status_code: "RECEIVED",
+    status_match: tab === "completed" ? "include" : "exclude",
+  }) as const;
+
 /** Rounded categorical pill used across the SAP Outward grid. */
 function Chip({
   children,
   tone,
   title,
   icon,
+  outline,
 }: {
   children: ReactNode;
-  tone?: number | "muted" | "success";
+  tone?: ChipTone;
   title?: string;
   icon?: ReactNode;
+  outline?: boolean;
 }) {
+  const tipId = useId();
   const mod = typeof tone === "number" ? `ds-chip-${tone}` : tone ? `ds-chip-${tone}` : "";
-  return (
+  const chip = (
     <span
-      className={`ds-chip ${mod}${title ? " cursor-help" : ""}`.trim()}
-      title={title}
+      className={`ds-chip ${mod}${outline ? " ds-chip-outline" : ""}${title ? " cursor-help" : ""}`.trim()}
+      aria-describedby={title ? tipId : undefined}
     >
       {icon}
       <span>{children}</span>
+    </span>
+  );
+  if (!title) return chip;
+  // Instant tooltip instead of the native `title` (which waits ~1s and is lost
+  // when the 5s refetch re-renders the row). Opens to the right so the table's
+  // overflow container never clips it.
+  return (
+    <span tabIndex={0} className="ds-focus-ring group relative inline-flex rounded-full outline-none">
+      {chip}
+      <span
+        id={tipId}
+        role="tooltip"
+        className="pointer-events-none absolute left-full top-1/2 z-10 ml-1.5 hidden -translate-y-1/2 whitespace-nowrap rounded-[var(--radius-sm)] bg-[var(--color-text)] px-2 py-1 text-[11px] font-medium text-[var(--color-surface)] shadow-[var(--shadow-md)] group-hover:block group-focus-visible:block"
+      >
+        {title}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Vendor name, read-only. One small font for every row so the column reads
+ * evenly; long names wrap onto at most two lines. -my-0.5 lets the two lines
+ * borrow cell padding so the row height does not change.
+ */
+function VendorText({ name, query }: { name: string; query: string }) {
+  return (
+    <span
+      title={name}
+      className="-my-0.5 line-clamp-2 block max-w-[6rem] whitespace-normal break-words text-[11px] leading-[1.15] text-text"
+    >
+      <Highlight text={name} query={query} />
     </span>
   );
 }
@@ -83,10 +133,38 @@ function fmtNum(v: unknown): string {
   return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 3 }) : String(v);
 }
 
-function fmtDate(v: string | null): string {
-  if (!v) return "—";
+/** Date and time as separate strings (user's locale) for the stacked Date / Timestamp cell. */
+function fmtDateParts(v: string | null): { date: string; time: string } | null {
+  if (!v) return null;
   const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? v : d.toLocaleString();
+  if (Number.isNaN(d.getTime())) return null;
+  return {
+    date: d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }),
+    time: d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }),
+  };
+}
+
+
+const escapeRegExp =(s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Marks every case-insensitive occurrence of the header-search query in `text`. */
+function Highlight({ text, query }: { text: string; query: string }) {
+  if (!query) return <>{text}</>;
+  // A capturing split puts the matches at the odd indices.
+  const parts = text.split(new RegExp(`(${escapeRegExp(query)})`, "gi"));
+  return (
+    <>
+      {parts.map((p, i) =>
+        i % 2 === 1 ? (
+          <mark key={i} className="rounded-sm bg-[var(--color-warning-bg)] px-0.5 text-inherit">
+            {p}
+          </mark>
+        ) : (
+          p
+        ),
+      )}
+    </>
+  );
 }
 
 /** Column shape lives here — exact headers/order per the SAP Upload reference. */
@@ -98,11 +176,12 @@ const COLUMN_DEFS: {
   type?: "date" | "number" | "text";
   editable?: boolean;
 }[] = [
-  { key: "transaction_date", header: "Date / Timestamp", type: "date" },
+  // A 1% width shrinks the column to its content instead of taking a share of the spare table width.
+  { key: "transaction_date", header: "Date / Timestamp", type: "date", width: "1%" },
   { key: "dc_no", header: "DC no" },
   { key: "po_no", header: "PO no" },
   { key: "model_no", header: "Model" },
-  { key: "vendor_name", header: "Vendor" },
+  { key: "vendor_name", header: "Vendor", width: "7rem" },
   { key: "batch_no", header: "Batch no" },
   { key: "movement_type", header: "SAP", align: "left" },
   { key: "quantity", header: "Lot Qty", align: "left", type: "number" },
@@ -110,6 +189,19 @@ const COLUMN_DEFS: {
 
 /** Remark is rendered as the last column, after the outward transaction fields. */
 const REMARK_DEF = { key: "remark" as const, header: "Remark", editable: true };
+
+/** Box UID / Outward Status stay visible by default; the rest collapse behind "Show more". */
+const OUTWARD_PRIMARY_DEFS = [
+  { key: "box_uid", header: "Box UID", type: "text" },
+  { key: "outward_status", header: "Outward Status", type: "text" },
+] as const;
+
+const OUTWARD_EXTRA_DEFS = [
+  { key: "tray_type", header: "Tray Type", type: "text" },
+  { key: "no_of_trays", header: "No. of Trays", type: "number" },
+  { key: "front_case_trays", header: "Front Case Trays", type: "number" },
+  { key: "back_case_trays", header: "Back Case Trays", type: "number" },
+] as const;
 
 function SapEmptyState() {
   return (
@@ -132,26 +224,63 @@ function SapEmptyState() {
 
 export function SapUploadView() {
   const [page, setPage] = useState(1);
+  const [expanded, setExpanded] = useState(false);
+  const [tab, setTab] = useState<OutwardTab>("open");
+  // DC / PO sheet opened from a cell's hover card.
+  const [docView, setDocView] = useState<{ kind: OutwardDocKind; id: string } | null>(null);
+  const closeDoc = useCallback(() => setDocView(null), []);
   const PAGE_SIZE = usePageSize();
   const updateRecord = useUpdateSapRecord();
   const toast = useToast();
   const qc = useQueryClient();
+  const router = useRouter();
 
-  // Live ("elastic") search — filters server-side as the user types.
-  const [query, setQuery] = useState("");
+  // Live ("elastic") search — typed in the header bar, filters server-side.
+  const query = useSearchStore((s) => s.query);
   const [search, setSearch] = useState("");
   useEffect(() => {
-    const t = setTimeout(() => setSearch(query.trim()), 180);
+    const t = setTimeout(() => setSearch(query.trim()), 150);
     return () => clearTimeout(t);
   }, [query]);
   useEffect(() => {
     setPage(1);
-  }, [search]);
+  }, [search, tab]);
+
+  // Box UIDs live in masterdata, not in the SAP feed. Resolve the query against
+  // the outward lines there (case-insensitive) and let the SAP service OR the
+  // matching reference ids into its own text search. With no query the params
+  // equal the `outwards` list below, so React Query shares one request.
+  const outwardMatches = useMdList<SapOutward>(
+    "sap-outwards",
+    search ? { page_size: 200, search } : { page_size: 200 },
+  );
+  const matchedRefs = useMemo(
+    () =>
+      search && !outwardMatches.isPlaceholderData
+        ? (outwardMatches.data?.items ?? []).map((o) => o.sap_reference_id).join(",")
+        : "",
+    [search, outwardMatches.data, outwardMatches.isPlaceholderData],
+  );
 
   const params = useMemo<ListRecordsParams>(
-    () => ({ page, page_size: PAGE_SIZE, ...(search ? { search } : {}) }),
-    [page, PAGE_SIZE, search],
+    () => ({
+      page,
+      page_size: PAGE_SIZE,
+      ...(search ? { search } : {}),
+      ...(matchedRefs ? { refs: matchedRefs } : {}),
+      ...outwardSplit(tab),
+    }),
+    [page, PAGE_SIZE, search, matchedRefs, tab],
   );
+  // Just the total of the other tab, for its badge.
+  const otherTab: OutwardTab = tab === "open" ? "completed" : "open";
+  const otherCount = useSapRecords({
+    page: 1,
+    page_size: 1,
+    ...(search ? { search } : {}),
+    ...(matchedRefs ? { refs: matchedRefs } : {}),
+    ...outwardSplit(otherTab),
+  });
 
   const records = useSapRecords(params);
   // The box / tray / status of each transaction lives in the Masterdata service's
@@ -167,7 +296,7 @@ export function SapUploadView() {
   // that isn't a registered vendor renders as "— (not in master)".
   // Box UID master — a transaction can only be dispatched against a Box UID that
   // exists here and is still "active" (i.e. an available box).
-  const boxesList = useMdList<Box>("boxes", { page_size: 500 });
+  const boxesList = useMdList<Box>("boxes", { page_size: 200 });
   const availableBoxUids = useMemo(() => {
     const s = new Set<string>();
     for (const b of boxesList.data?.items ?? []) {
@@ -175,6 +304,15 @@ export function SapUploadView() {
     }
     return s;
   }, [boxesList.data]);
+
+  // SAP movement-type lookup (masterdata) — code → description, shown on hover
+  // of the "SAP" cell. Edited from /masterdata-admin, not hardcoded.
+  const movementTypeMaster = useMovementTypeMaster();
+  const movementInfo = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const d of movementTypeMaster.data ?? []) m.set(d.code, d.description);
+    return m;
+  }, [movementTypeMaster.data]);
 
   // Outward-status lookup (masterdata) — code → label / dispatched flag.
   const statusMaster = useOutwardStatusMaster();
@@ -185,15 +323,28 @@ export function SapUploadView() {
     return m;
   }, [statusMaster.data]);
 
-  const vendorsList = useMdList<Vendor>("vendors", { page_size: 500 });
+  const vendorsList = useMdList<Vendor>("vendors", { page_size: 200 });
   const vendorName = useMemo(() => {
     const m = new Map<string, string>();
     for (const v of vendorsList.data?.items ?? []) m.set(v.vendor_code, v.vendor_name);
     return m;
   }, [vendorsList.data]);
 
+  /** Vendor as printed on the DC / PO: Vendor-master name + code of the line. */
+  const documentVendor = (row: SapInwardRecord) => {
+    const code = outwardByRef.get(row.sap_reference_id)?.vendor_code ?? row.vendor_code;
+    return vendorLabel(code ? vendorName.get(code) : null, code);
+  };
+
   const rows = useMemo(() => records.data?.items ?? [], [records.data]);
+  const docRow = docView ? (rows.find((r) => r.id === docView.id) ?? null) : null;
   const total = records.data?.total ?? 0;
+  const tabTotals: Record<OutwardTab, number | undefined> = {
+    [tab]: records.data?.total,
+    [otherTab]: otherCount.data?.total,
+  } as Record<OutwardTab, number | undefined>;
+  // Each line's status per stage comes from the Status service.
+  const lineStatus = useLineStatuses(rows.map((r) => r.sap_reference_id));
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   async function patch(id: string, patchBody: { remark?: string }) {
@@ -245,45 +396,64 @@ export function SapUploadView() {
         align: c.align ?? (c.type === "number" ? "right" : "left"),
         accessor: (row: SapInwardRecord) => cell(row, c.key) as string | number | null,
         render: (row: SapInwardRecord) => {
-          if (c.type === "date") return fmtDate(row.transaction_date);
+          if (c.type === "date") {
+            const p = fmtDateParts(row.transaction_date);
+            if (!p) return <span className="text-text-muted">—</span>;
+            // -my-0.5 lets the two lines borrow 2px of the cell padding so the
+            // row keeps the height set by the single-line chips beside it.
+            return (
+              <span className="-my-0.5 block text-[11px] leading-[1.15]">
+                <span className="block">{p.date}</span>
+                <span className="block text-text-muted">{p.time}</span>
+              </span>
+            );
+          }
           if (c.editable) {
             return <RemarkCell row={row} onSave={(v) => patch(row.id, { remark: v })} />;
           }
           if (c.key === "vendor_name") {
-            const out = outwardByRef.get(row.sap_reference_id);
-            if (!out) {
-              const name = row.vendor_code ? vendorName.get(row.vendor_code) : undefined;
-              return name ? (
-                <Chip tone={hueOf(name)}>{name}</Chip>
-              ) : (
-                <span className="text-text-muted">—</span>
-              );
-            }
-            // Editable code → the Masterdata service rejects anything that
-            // isn't a registered vendor; the cell shows the resolved name.
-            return (
-              <OutwardCell
-                field="vendor_code"
-                kind="text"
-                value={out.vendor_code}
-                optionLabel={(code) => vendorName.get(code) ?? code}
-                onSave={(v) => patchOutward(out.sap_reference_id, { vendor_code: v })}
-              />
+            // Read-only: the vendor comes from the outward line (else the SAP
+            // feed), shown by its Vendor-master name.
+            const code = outwardByRef.get(row.sap_reference_id)?.vendor_code ?? row.vendor_code;
+            const name = code ? (vendorName.get(code) ?? code) : null;
+            return name ? (
+              <VendorText name={name} query={search} />
+            ) : (
+              <span className="text-text-muted">—</span>
             );
           }
           const v = cell(row, c.key);
           if (v == null || v === "") return <span className="text-text-muted">—</span>;
 
           if (c.key === "dc_no" || c.key === "po_no") {
-            return <span className="ds-cell-id">{String(v)}</span>;
+            const kind: OutwardDocKind = c.key === "dc_no" ? "dc" : "po";
+            return (
+              <OutwardDocumentHover
+                kind={kind}
+                line={row}
+                boxUid={outwardByRef.get(row.sap_reference_id)?.box_uid ?? null}
+                vendorLabel={documentVendor(row)}
+                onView={() => setDocView({ kind, id: row.id })}
+                trigger={
+                  <span className="ds-cell-id">
+                    <Highlight text={String(v)} query={search} />
+                  </span>
+                }
+              />
+            );
           }
           if (c.key === "model_no") {
-            return <Chip tone={hueOf(String(v))}>{String(v)}</Chip>;
-          }
-          if (c.key === "movement_type") {
-            const meaning = MOVEMENT_INFO[String(v)] ?? "SAP movement type";
             return (
-              <Chip tone={2} title={`SAP ${String(v)} — ${meaning}`}>
+              <Chip tone={hueOf(String(v))}>
+                <Highlight text={String(v)} query={search} />
+              </Chip>
+            );
+          }
+          if (c.key === "batch_no") return <Highlight text={String(v)} query={search} />;
+          if (c.key === "movement_type") {
+            const meaning = movementInfo.get(String(v)) ?? "SAP movement type";
+            return (
+              <Chip tone={2} title={`${String(v)} — ${meaning}`}>
                 {String(v)}
               </Chip>
             );
@@ -292,16 +462,7 @@ export function SapUploadView() {
           return String(v);
         },
       })),
-      ...(
-        [
-          { key: "tray_type", header: "Tray Type", type: "text" },
-          { key: "no_of_trays", header: "No. of Trays", type: "number" },
-          { key: "front_case_trays", header: "Front Case Trays", type: "number" },
-          { key: "back_case_trays", header: "Back Case Trays", type: "number" },
-          { key: "box_uid", header: "Box UID", type: "text" },
-          { key: "outward_status", header: "Outward Status", type: "text" },
-        ] as const
-      ).map((c) => ({
+      ...[...OUTWARD_PRIMARY_DEFS, ...(expanded ? OUTWARD_EXTRA_DEFS : [])].map((c) => ({
         key: `out_${c.key}`,
         header: c.header,
         sortable: false,
@@ -315,6 +476,10 @@ export function SapUploadView() {
           // Status is derived from the Box UID (set by the service) — read-only.
           // Label + dispatched flag come from the outward-status master table.
           if (c.key === "outward_status") {
+            // Source of truth: the Status service (Dispatched → Received).
+            const st = lineStatus.statusOf(row.sap_reference_id, "outward");
+            if (st) return <Chip tone={CHIP_TONE[st.tone]}>{st.label}</Chip>;
+            // Status service not answered yet — fall back to the line's own column.
             const code =
               out.outward_status ??
               (out.box_uid && availableBoxUids.has(out.box_uid) ? DISPATCHED : "NEW");
@@ -324,7 +489,7 @@ export function SapUploadView() {
               (code === DISPATCHED ||
                 (!!out.box_uid && availableBoxUids.has(out.box_uid)));
             const label = def?.label ?? (dispatched ? "Dispatched" : "Yet to Dispatch");
-            return <Chip tone={dispatched ? "success" : "muted"}>{label}</Chip>;
+            return <Chip tone={dispatched ? "success" : "warning"}>{label}</Chip>;
           }
 
           // Box UID: once the line is dispatched the UID is frozen (read-only).
@@ -339,7 +504,7 @@ export function SapUploadView() {
                   title="Locked — this line is dispatched"
                   icon={<Lock className="size-3" />}
                 >
-                  {out.box_uid}
+                  <Highlight text={out.box_uid} query={search} />
                 </Chip>
               );
             }
@@ -348,7 +513,9 @@ export function SapUploadView() {
                 field="box_uid"
                 kind="text"
                 value={out.box_uid}
-                display={{ kind: "chip", tone: 0 }}
+                display={{ kind: "chip", tone: "warning" }}
+                placeholderTone="orange"
+                highlight={search}
                 selectOnFocus
                 uppercase
                 onSave={(v) => patchOutward(out.sap_reference_id, { box_uid: v })}
@@ -361,7 +528,7 @@ export function SapUploadView() {
             front_case_trays: 1,
             back_case_trays: 3,
           };
-          const display: { kind: "chip" | "num"; tone: number } | undefined =
+          const display: { kind: "chip" | "num"; tone: ChipTone } | undefined =
             c.key === "tray_type"
               ? { kind: "chip", tone: 0 }
               : c.type === "number"
@@ -379,24 +546,63 @@ export function SapUploadView() {
           );
         },
       })),
-      {
-        key: REMARK_DEF.key,
-        header: REMARK_DEF.header,
-        sortable: true,
-        align: "left" as const,
-        accessor: (row: SapInwardRecord) => row.remark ?? null,
-        render: (row: SapInwardRecord) => (
-          <RemarkCell row={row} onSave={(v) => patch(row.id, { remark: v })} />
-        ),
-      },
+      ...(expanded
+        ? [
+            {
+              key: "__rack",
+              header: "Location",
+              sortable: false,
+              align: "left" as const,
+              render: (row: SapInwardRecord) => {
+                const q =
+                  row.lot_no || row.model_no || outwardByRef.get(row.sap_reference_id)?.lot_no;
+                if (!q) return <span className="text-text-muted">—</span>;
+                return (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      router.push(`/rack-locator?q=${encodeURIComponent(String(q))}`)
+                    }
+                    title={`Locate ${q} in the racks`}
+                    className="ds-focus-ring inline-flex items-center gap-1 rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-primary hover:text-primary"
+                  >
+                    <MapPin className="size-3" />
+                    Rack
+                  </button>
+                );
+              },
+            },
+            {
+              key: REMARK_DEF.key,
+              header: REMARK_DEF.header,
+              sortable: true,
+              align: "left" as const,
+              accessor: (row: SapInwardRecord) => row.remark ?? null,
+              render: (row: SapInwardRecord) => (
+                <RemarkCell row={row} onSave={(v) => patch(row.id, { remark: v })} />
+              ),
+            },
+          ]
+        : []),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [updateRecord.isPending, serialOf, outwardByRef, vendorName, availableBoxUids, statusDef],
+    [
+      expanded,
+      updateRecord.isPending,
+      serialOf,
+      outwardByRef,
+      vendorName,
+      availableBoxUids,
+      statusDef,
+      movementInfo,
+      search,
+      lineStatus.statusOf,
+    ],
   );
 
   return (
     <>
-      <SapPageBanner />
+      <SapPageBanner expanded={expanded} onToggle={() => setExpanded((e) => !e)} />
 
       <DataTable<SapInwardRecord>
         columns={columns}
@@ -408,18 +614,54 @@ export function SapUploadView() {
         headerVariant="solid"
         columnDividers
         stickyHeader={false}
+        compact
         toolbar={
-          <SearchBar
-            value={query}
-            onChange={setQuery}
-            placeholder="Search DC, PO, model, vendor, batch…"
-            className="w-full max-w-md"
-          />
+          <div
+            role="tablist"
+            aria-label="Outward lines"
+            className="inline-flex rounded-[var(--radius-md)] border border-border bg-surface-2 p-0.5"
+          >
+            {(
+              [
+                ["open", "Main Table"],
+                ["completed", "Complete Table"],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={tab === key}
+                onClick={() => setTab(key)}
+                className={cn(
+                  "ds-focus-ring inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] px-3 py-1 text-xs font-medium transition-colors",
+                  tab === key
+                    ? "bg-primary-light text-primary shadow-[var(--shadow-sm)]"
+                    : "text-text-secondary hover:text-text",
+                )}
+              >
+                {label}
+                <span
+                  className={cn(
+                    "rounded-full px-1.5 text-[10px] tabular-nums",
+                    tab === key ? "bg-white/60 text-primary" : "bg-surface text-text-muted",
+                  )}
+                >
+                  {tabTotals[key] ?? "—"}
+                </span>
+              </button>
+            ))}
+          </div>
         }
         emptyContent={
           search ? (
             <div className="px-6 py-14 text-center text-sm text-text-secondary">
               No records match “{search}”.
+            </div>
+          ) : tab === "completed" ? (
+            <div className="px-6 py-14 text-center text-sm text-text-secondary">
+              No received lines yet — a line moves here when its Box UID is scanned on SAP
+              Inward.
             </div>
           ) : (
             <SapEmptyState />
@@ -435,6 +677,14 @@ export function SapUploadView() {
           />
         }
       />
+      <OutwardDocumentModal
+        view={
+          docView && docRow
+            ? { kind: docView.kind, line: docRow, vendorLabel: documentVendor(docRow) }
+            : null
+        }
+        onClose={closeDoc}
+      />
     </>
   );
 }
@@ -445,6 +695,8 @@ function OutwardCell({
   value,
   optionLabel,
   display,
+  placeholderTone,
+  highlight,
   selectOnFocus,
   uppercase,
   onSave,
@@ -453,7 +705,11 @@ function OutwardCell({
   kind: "text" | "number";
   value: string | number | null;
   optionLabel?: (o: string) => string;
-  display?: { kind: "chip" | "num"; tone: number };
+  display?: { kind: "chip" | "num"; tone: ChipTone };
+  /** render the empty "Set …" placeholder as an outline chip in this tone */
+  placeholderTone?: ChipTone;
+  /** header-search query to mark inside a plain (non-chip) value */
+  highlight?: string;
   /** select all on focus so a barcode scan overwrites the current value */
   selectOnFocus?: boolean;
   /** force the value to upper-case as it is typed (Box UID) */
@@ -492,14 +748,24 @@ function OutwardCell({
   }
 
   if (!editing) {
-    let content: ReactNode = (
-      <span className="text-text-muted">Set {field.replace(/_/g, " ")}…</span>
+    const placeholder = `Set ${field.replace(/_/g, " ")}…`;
+    let content: ReactNode = placeholderTone ? (
+      <Chip tone={placeholderTone} outline>
+        {placeholder}
+      </Chip>
+    ) : (
+      <span className="text-text-muted">{placeholder}</span>
     );
     if (shown != null) {
-      if (display?.kind === "chip") content = <Chip tone={display.tone}>{shown}</Chip>;
+      if (display?.kind === "chip")
+        content = (
+          <Chip tone={display.tone}>
+            {highlight !== undefined ? <Highlight text={shown} query={highlight} /> : shown}
+          </Chip>
+        );
       else if (display?.kind === "num")
         content = <span className={`ds-num ds-chip-${display.tone}`}>{shown}</span>;
-      else content = shown;
+      else content = highlight !== undefined ? <Highlight text={shown} query={highlight} /> : shown;
     }
     return (
       <button

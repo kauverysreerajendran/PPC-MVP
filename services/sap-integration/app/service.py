@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import status_client
 from app.config import settings
 from app.models import SapSyncRun
 from app.providers import get_provider
@@ -50,13 +51,30 @@ class SapService:
         search: str | None,
         sort: str,
         direction: str,
+        refs: list[str] | None = None,
+        status_stage: str | None = None,
+        status_code: str | None = None,
+        status_match: str = "include",
     ) -> Page[SapInwardRecordOut]:
+        # A status split asks the Status service which references are in that
+        # status, then filters this service's own rows by them.
+        only_refs: list[str] | None = None
+        exclude_refs: list[str] | None = None
+        if status_stage and status_code:
+            in_status = await status_client.refs_in(status_stage, status_code)
+            if status_match == "exclude":
+                exclude_refs = in_status
+            else:
+                only_refs = in_status
         rows, total = await self.repo.list_records(
             page=page,
             page_size=page_size,
             search=search,
             sort=sort,
             direction=direction,
+            refs=refs,
+            only_refs=only_refs,
+            exclude_refs=exclude_refs,
         )
         return Page[SapInwardRecordOut](
             items=[SapInwardRecordOut.model_validate(r) for r in rows],

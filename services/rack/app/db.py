@@ -1,4 +1,8 @@
-"""Async engine + session factory for `rack` — this service's private database."""
+"""Async engine + session factory for the Rack service.
+
+Connects to the single shared PostgreSQL database; all of this service's
+tables live in the `rack` schema (see `app.models.SCHEMA`).
+"""
 
 from __future__ import annotations
 

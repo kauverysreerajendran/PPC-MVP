@@ -31,7 +31,7 @@ class MockSapProvider:
     name = "mock"
 
     async def fetch_inward_records(self, *, count: int | None = None) -> list[SapRecordDTO]:
-        n = count or 12
+        n = count or 20  # the MVP's batch size (see app/seed.py)
         today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         out: list[SapRecordDTO] = []
         for i in range(n):

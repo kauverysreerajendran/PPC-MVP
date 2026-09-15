@@ -1,4 +1,4 @@
-"""Browser DB admin for `sap_db` (SQLAdmin), mounted at /admin.
+"""Browser DB admin for the `sap` schema (SQLAdmin), mounted at /admin.
 
 Local dev is open on localhost; any non-development environment requires the
 password in ``SAP_ADMIN_PASSWORD`` (login user is ignored).

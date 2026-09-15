@@ -37,6 +37,7 @@
   --color-primary-light: var(--color-teal-50);
   --color-primary-fg: #ffffff;
 
+
   /* Neutrals / surfaces (light) */
   --color-bg: #f4f6f8;
   --color-surface: #ffffff;
@@ -52,6 +53,10 @@
   --color-success-bg: #e7f6ee;
   --color-warning: #b8860b;
   --color-warning-bg: #fdf4e3;
+  /* Between warning (amber) and danger (red) — the "partial fill" tier of the
+     rack-occupancy scale (free=green, half=yellow, partial=orange, full=red). */
+  --color-orange: #c2670f;
+  --color-orange-bg: #fbe9d8;
   --color-danger: #d64545;
   --color-danger-bg: #fdecec;
   --color-info: var(--color-teal-600);
@@ -79,6 +84,16 @@
 
   /* Motion */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Sidebar (components/shell/Sidebar.tsx) */
+  --color-sidebar-from: #f3fbfb;
+  --color-sidebar-to: #e6f4f4;
+  --color-sidebar-border: rgb(15 118 110 / 0.12);
+  --color-sidebar-tile: #ffffff;
+  --color-sidebar-active-from: var(--color-teal-600);
+  --color-sidebar-active-to: var(--color-teal-700);
+  --shadow-sidebar-tile: 0 1px 3px rgb(12 74 80 / 0.12);
+  --shadow-sidebar-tile-hover: 0 2px 6px rgb(12 74 80 / 0.18);
 }
 
 /* Dark theme token overrides */
@@ -96,6 +111,14 @@
     --color-primary-hover: var(--color-teal-300);
     --color-primary-light: #12333a;
     --color-primary-fg: #042226;
+    --color-sidebar-from: #13232b;
+    --color-sidebar-to: #0f1b21;
+    --color-sidebar-border: rgb(126 220 226 / 0.14);
+    --color-sidebar-tile: #1b2f38;
+    --color-sidebar-active-from: var(--color-teal-700);
+    --color-sidebar-active-to: var(--color-teal-800);
+    --shadow-sidebar-tile: 0 1px 3px rgb(0 0 0 / 0.4);
+    --shadow-sidebar-tile-hover: 0 2px 6px rgb(0 0 0 / 0.5);
   }
 }
 
@@ -112,6 +135,14 @@
   --color-primary-hover: var(--color-teal-300);
   --color-primary-light: #12333a;
   --color-primary-fg: #042226;
+  --color-sidebar-from: #13232b;
+  --color-sidebar-to: #0f1b21;
+  --color-sidebar-border: rgb(126 220 226 / 0.14);
+  --color-sidebar-tile: #1b2f38;
+  --color-sidebar-active-from: var(--color-teal-700);
+  --color-sidebar-active-to: var(--color-teal-800);
+  --shadow-sidebar-tile: 0 1px 3px rgb(0 0 0 / 0.4);
+  --shadow-sidebar-tile-hover: 0 2px 6px rgb(0 0 0 / 0.5);
 }
 
 * {
@@ -340,6 +371,268 @@ main::-webkit-scrollbar-thumb,
   }
 }
 
+/* --------------------------------------------------------------------------
+ * Sign-in page (app/(auth)/login/page.tsx). The process artwork (7.png) fills
+ * the viewport edge to edge as a full-bleed backdrop; the sign-in card floats
+ * on top, right-aligned on desktop so it clears the poster's own focal point,
+ * centred below lg where there is no room to spare either side.
+ *
+ * The scanner is its own layer: `login-scanner.webp` laid back over
+ * `login-plate.webp` (7.png with it removed and the gap filled) at the box
+ * page.tsx measures, so it can lift and settle while the shelving, the label
+ * and the panel stay put. The laser flickers, the nose LED pulses in step, and
+ * a read line sweeps the label — the beam and the LED ride with the scanner,
+ * the read line stays on the barcode.
+ *
+ * All three effects are placed as percentages of `.login-scene`, which is the
+ * box `object-cover` would give the photo, worked out explicitly from the
+ * viewport — a percentage of the viewport would drift off the label as the
+ * window changed shape, because cover crops.
+ * ------------------------------------------------------------------------ */
+.login-page {
+  position: relative;
+  min-height: 100dvh;
+  overflow: hidden;
+  background: #0d2b33;
+}
+
+.login-scene {
+  /* 7.png is 3840x2160. Cover, anchored to the top edge like `object-top`. */
+  --scene-w: max(100vw, calc(100dvh * 16 / 9));
+  position: absolute;
+  left: 50%;
+  top: 0;
+  z-index: 0;
+  width: var(--scene-w);
+  height: calc(var(--scene-w) * 9 / 16);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+/* One read cycle: the beam settles, the line sweeps the label, then a pause. */
+.login-scene {
+  --scan-cycle: 3.2s;
+  --scan-teal: #63e6f2;
+  /* How far the hand lifts, as a share of the picture's height. Small on
+     purpose: what the layer uncovers is a fill, not a real photograph of what
+     is behind the hand, and the further it travels the more of it shows. */
+  --scan-lift: calc(var(--scene-w) * 9 / 16 * 0.006);
+  --scan-lift-cycle: 6.4s;
+}
+
+/* What belongs to the scanner and therefore moves with it: the cut-out and the
+   nose LED. The ray itself does not — it is painted into the plate and stays
+   welded to it. The rig spans the whole scene and only it is transformed, so
+   its children keep the plain picture percentages they were measured at. */
+.login-scan-rig {
+  position: absolute;
+  inset: 0;
+}
+.login-scan-cut {
+  position: absolute;
+  left: var(--s-l);
+  top: var(--s-t);
+  width: var(--s-w);
+  height: var(--s-h);
+}
+
+/* The laser, anchored on the label and rotated back to the scanner's nose, so
+   the geometry comes from the two measured points rather than a guessed angle. */
+.login-scan-beam {
+  position: absolute;
+  left: var(--s-l);
+  top: var(--s-t);
+  width: var(--s-w);
+  /* Matched to the painted ray's core, which is about 50px across at the
+     picture's full size — a hairline read as a second, thinner ray beside it. */
+  height: 0.75%;
+  margin-top: -0.375%;
+  transform: rotate(var(--s-deg));
+  transform-origin: 0 50%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgb(99 230 242 / 0.55) 0%,
+    var(--scan-teal) 35%,
+    rgb(160 245 255 / 0.9) 100%
+  );
+  filter: blur(0.12vw);
+  box-shadow: 0 0 22px 6px rgb(99 230 242 / 0.4);
+  mix-blend-mode: screen;
+  opacity: 0.9;
+}
+
+/* The nose LED, brightening as each read starts. */
+.login-scan-led {
+  position: absolute;
+  left: var(--s-l);
+  top: var(--s-t);
+  width: 1.8%;
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgb(255 255 255 / 0.9) 0%, var(--scan-teal) 35%, rgb(99 230 242 / 0) 70%);
+  mix-blend-mode: screen;
+  opacity: 0.55;
+}
+
+/* The read line, clipped to the label. The label sits in perspective, so the
+   box is rotated to its measured angle and the line simply travels down it. */
+.login-scan-sweep {
+  position: absolute;
+  left: var(--s-l);
+  top: var(--s-t);
+  width: var(--s-w);
+  height: var(--s-h);
+  overflow: hidden;
+  transform: translate(-50%, -50%) rotate(var(--s-deg));
+}
+/* Deliberately NOT `screen`: the label is white, and screen cannot brighten
+   white, so the line would be invisible exactly where it has to read. A tinted
+   overlay darkens the paper as it passes, which is what a read looks like. */
+.login-scan-line {
+  position: absolute;
+  left: -8%;
+  right: -8%;
+  top: 0;
+  height: 22%;
+  background: linear-gradient(
+    to bottom,
+    rgb(12 120 134 / 0),
+    rgb(22 170 186 / 0.45) 38%,
+    rgb(120 245 255 / 0.95) 50%,
+    rgb(22 170 186 / 0.45) 62%,
+    rgb(12 120 134 / 0)
+  );
+  box-shadow: 0 0 18px 4px rgb(99 230 242 / 0.45);
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .login-scan-beam {
+    animation: login-scan-flicker var(--scan-cycle) steps(1, end) infinite;
+  }
+  .login-scan-led {
+    animation: login-scan-led var(--scan-cycle) ease-in-out infinite;
+  }
+  .login-scan-line {
+    animation: login-scan-sweep var(--scan-cycle) ease-in-out infinite;
+    will-change: transform;
+  }
+  .login-scan-rig {
+    animation: login-scan-lift var(--scan-lift-cycle) ease-in-out infinite;
+    will-change: transform;
+  }
+}
+
+/* A real laser is not steady while it reads: short, uneven steps, then a hold. */
+@keyframes login-scan-flicker {
+  0%,
+  10%,
+  20%,
+  30% {
+    opacity: 0.72;
+  }
+  5%,
+  15%,
+  25%,
+  35%,
+  100% {
+    opacity: 1;
+  }
+  40%,
+  70% {
+    opacity: 0.85;
+  }
+}
+@keyframes login-scan-led {
+  0%,
+  100% {
+    opacity: 0.45;
+    scale: 0.82;
+  }
+  18% {
+    opacity: 1;
+    scale: 1.08;
+  }
+  45% {
+    opacity: 0.6;
+    scale: 0.95;
+  }
+}
+/* The hand lifts, holds, settles a touch low, and comes back. */
+@keyframes login-scan-lift {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  32% {
+    transform: translateY(calc(-1 * var(--scan-lift)));
+  }
+  68% {
+    transform: translateY(calc(var(--scan-lift) * 0.45));
+  }
+}
+
+/* Down the label, and done — the rest of the cycle is the pause between reads. */
+@keyframes login-scan-sweep {
+  0% {
+    transform: translateY(-14%);
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  38% {
+    opacity: 1;
+  }
+  45%,
+  100% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+
+.login-card-wrap {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-height: 100dvh;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.5rem;
+}
+
+/* The card: a soft pale-teal surface with a folded teal corner, matching the
+   sign-in mock. */
+.login-card {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  max-width: 19rem;
+  border-radius: 1.5rem;
+  background: linear-gradient(165deg, #f3fbfb 0%, #e3f5f5 100%);
+  box-shadow: 0 24px 48px -18px rgb(2 33 41 / 0.45);
+  padding: 1.75rem 1.5rem 1.625rem;
+}
+.login-card-fold {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6.5rem;
+  height: 6.5rem;
+  background: linear-gradient(135deg, #bdeef0 0%, #4fb9c4 45%, #0d7686 100%);
+  clip-path: polygon(100% 0, 0 0, 100% 100%);
+  filter: drop-shadow(-6px 6px 8px rgb(4 60 70 / 0.3));
+}
+
+@media (min-width: 1024px) {
+  .login-card-wrap {
+    justify-content: flex-end;
+    padding: 2rem 4rem 3rem 2rem;
+  }
+}
+
 .ds-animate-fade {
   animation: ds-fade-in 0.2s var(--ease-out) both;
 }
@@ -426,6 +719,14 @@ main::-webkit-scrollbar-thumb,
   font-weight: 500;
 }
 .ds-chip-success { --ds-chip: var(--color-success); }
+/* state tones beside teal: light yellow = pending, orange = action needed */
+.ds-chip-warning { --ds-chip: var(--color-warning); }
+.ds-chip-orange { --ds-chip: #ea580c; }
+/* outline variant — an empty slot the operator still has to fill */
+.ds-chip-outline {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--ds-chip, var(--color-primary)) 60%, transparent);
+}
 
 /* link-style identifier cells (DC / PO numbers) */
 .ds-cell-id {
@@ -586,23 +887,30 @@ main::-webkit-scrollbar-thumb,
  * "Network's crawling" banner — a slow-net mascot that drops in up top
  * ------------------------------------------------------------------------ */
 @keyframes ds-slownet-drop {
-  from { transform: translateY(-120%); opacity: 0; }
+  from { transform: translateY(-140%); opacity: 0; }
   to   { transform: translateY(0); opacity: 1; }
 }
-@keyframes ds-snail-bob {
-  0%, 100% { transform: translateY(0) rotate(-1deg); }
-  50%      { transform: translateY(-1.5px) rotate(1deg); }
+@keyframes ds-bot-bob {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-2px); }
 }
-@keyframes ds-snail-crawl {
-  0%, 100% { transform: translateX(0); }
-  50%      { transform: translateX(2px); }
+@keyframes ds-bot-blip {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.35; transform: scale(0.7); }
 }
-@keyframes ds-snail-eye {
-  0%, 92%, 100% { transform: scaleY(1); }
-  96%           { transform: scaleY(0.1); }
+@keyframes ds-bot-eye {
+  0%, 90%, 100% { transform: scaleY(1); }
+  95%           { transform: scaleY(0.15); }
 }
-@keyframes ds-snail-trail {
-  to { stroke-dashoffset: -24; }
+@keyframes ds-bot-leds {
+  0%   { opacity: 0.35; }
+  33%  { opacity: 1; }
+  66%  { opacity: 0.55; }
+  100% { opacity: 0.35; }
+}
+@keyframes ds-bot-arm {
+  0%, 100% { transform: rotate(0deg); }
+  50%      { transform: rotate(-18deg); }
 }
 @keyframes ds-slownet-caption {
   from { opacity: 0; transform: translateY(4px); }
@@ -614,25 +922,22 @@ main::-webkit-scrollbar-thumb,
   background:
     linear-gradient(
       135deg,
-      color-mix(in srgb, var(--color-warning) 22%, var(--color-surface)),
-      color-mix(in srgb, var(--color-warning) 9%, var(--color-surface))
+      color-mix(in srgb, var(--color-primary) 14%, var(--color-surface)),
+      color-mix(in srgb, var(--color-primary) 5%, var(--color-surface))
     );
-  border: 1px solid color-mix(in srgb, var(--color-warning) 38%, transparent);
-  border-top: none;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 30%, transparent);
   box-shadow: var(--shadow-lg);
 }
-.ds-snail { animation: ds-snail-bob 2.4s ease-in-out infinite; transform-origin: 60% 80%; }
-.ds-snail-foot { animation: ds-snail-crawl 1.2s ease-in-out infinite; }
-.ds-snail-eye { animation: ds-snail-eye 4s ease-in-out infinite; transform-origin: center; }
-.ds-snail-trail {
-  stroke-dasharray: 3 5;
-  animation: ds-snail-trail 1.1s linear infinite;
-}
+.ds-bot { animation: ds-bot-bob 2.6s ease-in-out infinite; transform-origin: center; }
+.ds-bot-blip { animation: ds-bot-blip 1s ease-in-out infinite; transform-origin: center; }
+.ds-bot-eye { animation: ds-bot-eye 3.2s ease-in-out infinite; transform-origin: center; }
+.ds-bot-leds { animation: ds-bot-leds 1.4s steps(1, end) infinite; }
+.ds-bot-arm { animation: ds-bot-arm 1.3s ease-in-out infinite; transform-origin: 46px 42px; }
 .ds-slownet-caption { animation: ds-slownet-caption 0.35s var(--ease-out) both; }
 
 @media (prefers-reduced-motion: reduce) {
-  .ds-slownet, .ds-snail, .ds-snail-foot, .ds-snail-eye,
-  .ds-snail-trail, .ds-slownet-caption { animation: none; }
+  .ds-slownet, .ds-bot, .ds-bot-blip, .ds-bot-eye,
+  .ds-bot-leds, .ds-bot-arm, .ds-slownet-caption { animation: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -648,4 +953,257 @@ main::-webkit-scrollbar-thumb,
 .ds-focus-ring:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+ * Operations flow (features/ops-flow) — the MVP process diagram on the
+ * Overview screen. Static content: the five steps material goes through, not
+ * a report of anything in the database.
+ *
+ * The "live" part is one consignment walking the line. Every node and every
+ * rail runs the SAME animation length, --ops-flow-cycle, and is offset by its
+ * own step number times --ops-flow-beat; each keyframe set is busy only for
+ * the first fifth of the cycle and idle for the rest, so exactly one step is
+ * lit at a time and the highlight travels 1 → 5 and starts over. One beat is
+ * the cycle divided by the five steps — that division is the only place the
+ * step count appears in this file.
+ *
+ * Only transform and opacity animate, so every frame is composited. The track
+ * is a column of cards on phones and a row from lg; a token crosses a rail's
+ * own length plus its own length (2rem + 0.5rem across, 1.5rem + 0.5rem
+ * down), and the rail box below is what defines those distances.
+ * ------------------------------------------------------------------------ */
+.ops-flow-track {
+  --ops-flow-cycle: 6s;
+  --ops-flow-beat: calc(var(--ops-flow-cycle) / 5);
+  display: flex;
+  flex-direction: column;
+}
+.ops-flow-item {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.ops-flow-rail {
+  position: relative;
+  align-self: center;
+  width: 2px;
+  height: 1.5rem;
+  flex: none;
+  overflow: hidden;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--color-border-strong) 85%, transparent);
+}
+/* Last node: the same box with no rail, so every card keeps the same width. */
+.ops-flow-rail--end {
+  height: 0;
+  background: none;
+}
+
+.ops-flow-token {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  margin-left: -1px;
+  width: 2px;
+  height: 0.5rem;
+  border-radius: 1px;
+  background: var(--color-primary);
+  opacity: 0;
+}
+
+/* ---- Node card -------------------------------------------------------- */
+.ops-flow-node {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.875rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  transition:
+    border-color 200ms var(--ease-out),
+    box-shadow 200ms var(--ease-out),
+    transform 200ms var(--ease-out);
+}
+.ops-flow-node:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-md);
+}
+/* The travelling highlight: a ring that grows out to the card edge and fades.
+   It stops at scale(1) because the card clips its own overflow. */
+.ops-flow-node::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border: 1px solid var(--color-primary);
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+}
+.ops-flow-node-sweep {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in srgb, var(--color-primary) 16%, transparent),
+    transparent
+  );
+}
+
+.ops-flow-node-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-strong);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--color-text-muted);
+}
+.ops-flow-node-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-sm);
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+}
+.ops-flow-node-icon > svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* The anchor covers the whole card, so anything else inside the card can stay
+   non-interactive rather than nesting controls inside a link. */
+.ops-flow-node-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+/* ---- lg and up: the track lies down ----------------------------------- */
+@media (min-width: 1024px) {
+  .ops-flow-track {
+    flex-direction: row;
+    align-items: stretch;
+  }
+  .ops-flow-item {
+    flex: 1 1 0;
+    flex-direction: row;
+    align-items: center;
+  }
+  .ops-flow-rail,
+  .ops-flow-rail--end {
+    width: 2rem;
+    height: 2px;
+  }
+  .ops-flow-token {
+    left: 0;
+    top: 50%;
+    margin: -1px 0 0 0;
+    width: 0.5rem;
+    height: 2px;
+  }
+}
+
+/* ---- Motion: the consignment walks the line --------------------------- */
+@media (prefers-reduced-motion: no-preference) {
+  .ops-flow-node::before {
+    animation: ops-flow-walk var(--ops-flow-cycle) var(--ease-out) infinite;
+    animation-delay: calc(var(--ops-flow-step) * var(--ops-flow-beat));
+  }
+  .ops-flow-node-sweep {
+    animation: ops-flow-sweep var(--ops-flow-cycle) ease-in-out infinite;
+    animation-delay: calc(var(--ops-flow-step) * var(--ops-flow-beat));
+    will-change: transform;
+  }
+  /* The token leaves a node just after that node lights, so the highlight and
+     the traffic read as the same consignment moving on. */
+  .ops-flow-token {
+    animation: ops-flow-travel-y var(--ops-flow-cycle) linear infinite;
+    animation-delay: calc((var(--ops-flow-step) + 0.55) * var(--ops-flow-beat));
+    will-change: transform;
+  }
+}
+@media (min-width: 1024px) and (prefers-reduced-motion: no-preference) {
+  .ops-flow-token {
+    animation-name: ops-flow-travel-x;
+  }
+}
+
+/* Busy for the first fifth of the cycle, idle for the other four. */
+@keyframes ops-flow-walk {
+  0% {
+    transform: scale(0.985);
+    opacity: 0;
+  }
+  6% {
+    opacity: 0.6;
+  }
+  20%,
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+@keyframes ops-flow-sweep {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  4%,
+  16% {
+    opacity: 1;
+  }
+  20%,
+  100% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+@keyframes ops-flow-travel-y {
+  0% {
+    transform: translateY(-0.5rem);
+    opacity: 0;
+  }
+  2%,
+  12% {
+    opacity: 1;
+  }
+  14%,
+  100% {
+    transform: translateY(1.5rem);
+    opacity: 0;
+  }
+}
+@keyframes ops-flow-travel-x {
+  0% {
+    transform: translateX(-0.5rem);
+    opacity: 0;
+  }
+  2%,
+  12% {
+    opacity: 1;
+  }
+  14%,
+  100% {
+    transform: translateX(2rem);
+    opacity: 0;
+  }
 }

@@ -1,22 +1,14 @@
 "use client";
 
-import { ChevronRight } from "lucide-react";
+import { LayoutGrid } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { RackSummary } from "../types";
-import { RACK_STATE, num, pct } from "./trayStyles";
-
-const TONE_TEXT = {
-  neutral: "text-text-secondary",
-  success: "text-[var(--color-success)]",
-  info: "text-[var(--color-info)]",
-  warning: "text-[var(--color-warning)]",
-  danger: "text-[var(--color-danger)]",
-} as const;
+import { RACK_STATE, TONE_BG, TONE_FILL, TONE_TEXT, num, pct, toneForOccupancyPct } from "./trayStyles";
 
 /**
- * A rack as it appears on the aisle map: its identity, its shape, and a mini
- * elevation where each bar is one shelf filled to that shelf's occupancy — so
- * "which shelf still has room" is legible before drilling in.
+ * A rack in a list. `compact` is the row in the "Racks in Aisle" rail — icon,
+ * id, and how empty it is. The full card adds the shape and a fill bar for the
+ * aisle overview.
  */
 export function RackCard({
   rack,
@@ -39,25 +31,21 @@ export function RackCard({
         onClick={() => onOpen(rack)}
         aria-current={active ? "true" : undefined}
         className={cn(
-          "ds-focus-ring group flex w-full items-center gap-2.5 border-l-2 px-3 py-2 text-left transition-colors",
+          "ds-focus-ring group flex w-full items-center justify-between gap-1.5 rounded-[var(--radius-xs)] px-2 py-1 text-left text-xs transition-colors",
           active
-            ? "border-l-primary bg-teal-50 dark:bg-[#12333a]"
-            : "border-l-transparent hover:bg-surface-2",
+            ? "bg-teal-50 font-medium text-teal-800 dark:bg-[#12333a] dark:text-teal-200"
+            : "text-text-secondary hover:bg-surface-2",
         )}
       >
-        <MiniRack rack={rack} className="h-6 w-4" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-xs font-semibold">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <LayoutGrid className="size-3 shrink-0 text-text-muted" />
+          <span className="truncate">
             {rack.aisle_code}-{rack.rack_code}
           </span>
-          <span className="block text-[10px] tabular-nums text-text-muted">
-            {rack.shelf_count}×{rack.row_count}×{rack.tray_count}
-          </span>
         </span>
-        <span className={cn("text-xs font-medium tabular-nums", TONE_TEXT[state.tone])}>
+        <span className={cn("shrink-0 text-[11px] tabular-nums", TONE_TEXT[state.tone])}>
           {pct(occupancy.availability_pct)}
         </span>
-        <ChevronRight className="size-3.5 shrink-0 text-text-muted opacity-0 transition-opacity group-hover:opacity-100" />
       </button>
     );
   }
@@ -94,12 +82,12 @@ export function RackCard({
           </span>
         </div>
         <div
-          className="mt-1.5 h-1 overflow-hidden rounded-full bg-surface-2"
+          className={cn("mt-1.5 h-1 overflow-hidden rounded-full", TONE_BG[state.tone])}
           role="img"
           aria-label={`${pct(occupancy.occupancy_pct)} occupied`}
         >
           <div
-            className="h-full rounded-full bg-primary transition-[width] duration-300"
+            className={cn("h-full rounded-full transition-[width] duration-300", TONE_FILL[state.tone])}
             style={{ width: `${Math.min(100, occupancy.occupancy_pct)}%` }}
           />
         </div>
@@ -109,8 +97,8 @@ export function RackCard({
 }
 
 /**
- * A rack elevation in miniature: one bar per shelf, top shelf at the top,
- * each filled left-to-right by that shelf's occupancy.
+ * A rack elevation in miniature: one bar per shelf, top shelf at the top, each
+ * filled left-to-right by that shelf's occupancy.
  */
 function MiniRack({ rack, className }: { rack: RackSummary; className?: string }) {
   return (
@@ -121,17 +109,20 @@ function MiniRack({ rack, className }: { rack: RackSummary; className?: string }
       )}
       aria-hidden
     >
-      {rack.shelves.map((shelf) => (
-        <span
-          key={shelf.shelf_no}
-          className="relative block min-h-[2px] flex-1 overflow-hidden rounded-[1px] bg-teal-100 dark:bg-[#12333a]"
-        >
+      {rack.shelves.map((shelf) => {
+        const tone = toneForOccupancyPct(shelf.occupancy.occupancy_pct);
+        return (
           <span
-            className="absolute inset-y-0 left-0 bg-[var(--color-text-muted)] opacity-50"
-            style={{ width: `${Math.min(100, shelf.occupancy.occupancy_pct)}%` }}
-          />
-        </span>
-      ))}
+            key={shelf.shelf_no}
+            className={cn("relative block min-h-[2px] flex-1 overflow-hidden rounded-[1px]", TONE_BG[tone])}
+          >
+            <span
+              className={cn("absolute inset-y-0 left-0", TONE_FILL[tone])}
+              style={{ width: `${Math.min(100, shelf.occupancy.occupancy_pct)}%` }}
+            />
+          </span>
+        );
+      })}
     </span>
   );
 }

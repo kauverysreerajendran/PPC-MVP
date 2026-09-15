@@ -34,7 +34,10 @@ client: redis.Redis = redis.Redis(connection_pool=_pool)
 # timeout per request. Once a call fails we "open the circuit" for a short
 # cooldown so subsequent requests skip Redis entirely (instant) until we
 # re-probe. This keeps the whole API fast when Redis is simply not running.
-_CIRCUIT_COOLDOWN_SECONDS = 20.0
+# 120 s (was 20 s): with Redis down, every re-probe costs one request a full
+# socket timeout (0.5 s). One stall per two minutes instead of per 20 s keeps
+# the fail-open path fast (docs/09 §1, guardrails §3.9).
+_CIRCUIT_COOLDOWN_SECONDS = 120.0
 _circuit_open_until = 0.0
 
 

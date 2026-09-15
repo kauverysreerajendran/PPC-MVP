@@ -1,9 +1,16 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { Boxes, ChevronRight, Grid3x3 } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { ThemeSetting } from "@/features/settings/ThemeSetting";
+
+const MASTER_LINKS = [
+  { label: "Master Data", description: "Vendors, models, materials and other master tables.", href: "/master-data", icon: Boxes },
+  { label: "Racks", href: "/racks", description: "Rack topology and tray slot layout.", icon: Grid3x3 },
+];
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -62,6 +69,25 @@ export default async function SettingsPage() {
           <Button variant="secondary" size="sm">
             Change password
           </Button>
+        </Section>
+
+        <Section title="Masters" description="Manage master data and rack topology.">
+          <div className="space-y-2">
+            {MASTER_LINKS.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className="ds-focus-ring flex items-center gap-3 rounded-[var(--radius-md)] border border-border px-3 py-2.5 text-sm hover:border-primary hover:bg-surface-2"
+              >
+                <item.icon className="size-4 shrink-0 text-primary" />
+                <span className="flex-1">
+                  <span className="block font-medium">{item.label}</span>
+                  <span className="block text-xs text-text-secondary">{item.description}</span>
+                </span>
+                <ChevronRight className="size-4 shrink-0 text-text-muted" />
+              </Link>
+            ))}
+          </div>
         </Section>
       </div>
     </>

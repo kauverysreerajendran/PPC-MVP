@@ -2,6 +2,9 @@
 
 /**
  * First-paint buffering indicator for full page loads and browser refreshes.
+ * Dismissed once the document is parsed (DOMContentLoaded) — it must not wait
+ * for every image and font to download (docs/08 §1.4); the 20 s timer is the
+ * safety net.
  *
  * The visible node lives inside a `dangerouslySetInnerHTML` wrapper so React
  * never reconciles it — the cleanup script below mutates/removes `#ds-boot`
@@ -28,8 +31,8 @@ const CLEANUP =
   "(function(){function d(){var e=document.getElementById('ds-boot');" +
   "if(!e)return;e.setAttribute('data-done','1');" +
   "setTimeout(function(){e.parentNode&&e.parentNode.removeChild(e);},450);}" +
-  "if(document.readyState==='complete'){d();}" +
-  "else{window.addEventListener('load',d,{once:true});}" +
+  "if(document.readyState!=='loading'){d();}" +
+  "else{document.addEventListener('DOMContentLoaded',d,{once:true});}" +
   "setTimeout(d,20000);})();";
 
 export function BootLoader() {

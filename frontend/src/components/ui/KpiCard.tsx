@@ -19,6 +19,7 @@ export function KpiCard({
   tone = "default",
   delta,
   hint,
+  delayMs = 0,
 }: {
   label: string;
   value: ReactNode;
@@ -26,13 +27,23 @@ export function KpiCard({
   tone?: Tone;
   delta?: { value: string; direction: "up" | "down"; positive?: boolean };
   hint?: string;
+  /** stagger the entrance animation across a row of cards */
+  delayMs?: number;
 }) {
   return (
-    <div className="rounded-[var(--radius-md)] border border-border bg-surface p-4 transition-colors hover:border-border-strong">
+    <div
+      className="ds-animate-fade-up group rounded-[var(--radius-md)] border border-border bg-surface p-4 transition-[border-color,box-shadow,transform] duration-200 ease-out hover:-translate-y-0.5 hover:border-border-strong hover:shadow-[var(--shadow-md)]"
+      style={{ animationDelay: `${delayMs}ms` }}
+    >
       <div className="flex items-start justify-between">
         <span className="text-xs font-medium uppercase tracking-wide text-text-muted">{label}</span>
         {icon ? (
-          <span className={cn("flex size-8 items-center justify-center rounded-[var(--radius-sm)] [&>svg]:size-4", iconTone[tone])}>
+          <span
+            className={cn(
+              "flex size-8 items-center justify-center rounded-[var(--radius-sm)] transition-transform duration-200 ease-out group-hover:scale-110 [&>svg]:size-4",
+              iconTone[tone],
+            )}
+          >
             {icon}
           </span>
         ) : null}

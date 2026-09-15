@@ -8,7 +8,7 @@ import { useToast } from "@/components/ui/Toast";
 import { ApiError } from "@/lib/api/errors";
 import { useOccupyTray, useReleaseTray } from "../hooks";
 import type { SelectedLocation } from "../types";
-import { TRAY_STATE } from "./trayStyles";
+import { TRAY_STATE, rowPositionLabel } from "./trayStyles";
 
 const STATE_TONE = {
   empty: "success",
@@ -23,9 +23,11 @@ const STATE_TONE = {
  */
 export function LocationSummary({
   selected,
+  rowCount,
   onCleared,
 }: {
   selected: SelectedLocation | null;
+  rowCount?: number | undefined;
   onCleared?: () => void;
 }) {
   const [modelNo, setModelNo] = useState("");
@@ -38,12 +40,17 @@ export function LocationSummary({
 
   if (!selected) {
     return (
-      <div className="rounded-[var(--radius-md)] border border-dashed border-border bg-surface px-4 py-8 text-center">
-        <MapPin className="mx-auto size-5 text-text-muted" />
-        <p className="mt-2 text-xs font-medium">No tray selected</p>
-        <p className="mt-1 text-xs text-text-secondary">
-          Pick a tray in the rack, or run Locate Me for the nearest empty one.
-        </p>
+      <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-4 shadow-[var(--shadow-sm)]">
+        <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-text">
+          <MapPin className="size-3.5 text-primary" />
+          Selected Location
+        </h2>
+        <div className="rounded-[var(--radius-md)] border border-dashed border-border bg-surface-2 px-3 py-6 text-center">
+          <p className="text-xs font-medium">No tray selected</p>
+          <p className="mt-1 text-xs text-text-secondary">
+            Pick a tray in the rack, or run Locate Me.
+          </p>
+        </div>
       </div>
     );
   }
@@ -70,42 +77,43 @@ export function LocationSummary({
     }
   }
 
+  const posLabel = rowCount ? rowPositionLabel(selected.row_no, rowCount) : "";
   const rows: [string, string][] = [
-    ["Warehouse", selected.warehouse_code],
-    ["Aisle", selected.aisle_code],
     ["Rack", selected.rack_code],
     ["Shelf", `S${selected.shelf_no}`],
-    ["Row", `R${selected.row_no}`],
+    ["Row", `R${selected.row_no}${posLabel ? ` (${posLabel})` : ""}`],
     ["Tray", String(selected.tray_no).padStart(2, "0")],
   ];
+  if (selected.occupied_by_model) rows.push(["Model", selected.occupied_by_model]);
+  if (selected.lot_no) rows.push(["Lot", selected.lot_no]);
+  if (selected.qty != null) rows.push(["Qty", Number(selected.qty).toLocaleString()]);
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-border bg-surface">
-      <header className="flex items-center justify-between gap-2 border-b border-border px-3.5 py-2.5">
-        <span className="flex items-center gap-1.5 text-xs font-semibold">
+    <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-4 shadow-[var(--shadow-sm)]">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="flex items-center gap-1.5 text-sm font-semibold text-text">
           <MapPin className="size-3.5 text-primary" />
           Selected Location
-        </span>
+        </h2>
         <StatusBadge
-          label={TRAY_STATE[selected.state].label}
+          label={TRAY_STATE[selected.state].label.replace(" Tray", "")}
           tone={STATE_TONE[selected.state]}
         />
-      </header>
+      </div>
 
-      <dl className="divide-y divide-border">
+      <dl className="space-y-1.5 rounded-[var(--radius-md)] bg-teal-50 p-3 text-sm dark:bg-[#12333a]">
         {rows.map(([label, value]) => (
-          <div key={label} className="flex items-center justify-between px-3.5 py-1.5">
-            <dt className="text-xs text-text-muted">{label}</dt>
-            <dd className="text-xs font-medium tabular-nums">{value}</dd>
+          <div key={label} className="flex items-center justify-between">
+            <dt className="text-text-secondary">{label}</dt>
+            <dd className="font-medium tabular-nums text-text">{value}</dd>
           </div>
         ))}
+        <div className="mt-1 border-t border-[color-mix(in_srgb,var(--color-primary)_20%,transparent)] pt-1.5 text-center font-mono text-xs font-semibold tracking-wide text-primary">
+          {selected.code}
+        </div>
       </dl>
 
-      <div className="border-t border-border px-3.5 py-3">
-        <p className="mb-2 text-center font-mono text-xs font-semibold tracking-wide text-primary">
-          {selected.code}
-        </p>
-
+      <div className="mt-3">
         {selected.state === "occupied" ? (
           <Button
             variant="secondary"
@@ -128,7 +136,7 @@ export function LocationSummary({
               onKeyDown={(e) => {
                 if (e.key === "Enter") void confirm();
               }}
-              className="h-8 w-full rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2.5 text-xs text-text outline-none placeholder:text-text-muted focus:border-primary focus:ring-2 focus:ring-[color-mix(in_srgb,var(--color-primary)_28%,transparent)]"
+              className="h-9 w-full rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2.5 text-sm text-text outline-none placeholder:text-text-muted focus:border-primary focus:ring-2 focus:ring-[color-mix(in_srgb,var(--color-primary)_28%,transparent)]"
             />
             <Button
               size="sm"

@@ -52,17 +52,29 @@ class CrudRepository(Generic[M]):
         sort: str,
         direction: str,
         filters: dict[str, Any] | None = None,
+        with_total: bool = True,
     ) -> tuple[list[M], int]:
-        stmt = select(self.model)
+        """``with_total=False`` skips the COUNT(*) (docs/02 §4.3 — return the total
+        only when the client needs it); the returned total is then the number of
+        rows on this page."""
+        where: list[ColumnElement[bool]] = []
         for field, value in (filters or {}).items():
             if value is not None:
-                stmt = stmt.where(getattr(self.model, field) == value)
+                where.append(getattr(self.model, field) == value)
         if search and self.searchable:
             like = f"%{search.strip()}%"
             conds: list[ColumnElement[bool]] = [c.ilike(like) for c in self.searchable]
-            stmt = stmt.where(or_(*conds))
+            where.append(or_(*conds))
+        stmt = select(self.model).where(*where)
 
-        total = await session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+        total = 0
+        if with_total:
+            # Count the table directly with the same predicates — no subquery
+            # wrapper for the planner to flatten.
+            total = (
+                await session.scalar(select(func.count()).select_from(self.model).where(*where))
+                or 0
+            )
 
         col = self.sortable.get(sort) or self.sortable.get(self.default_sort)
         if col is None:  # pragma: no cover - default_sort is always registered
@@ -70,7 +82,7 @@ class CrudRepository(Generic[M]):
         stmt = stmt.order_by(col.desc() if direction == "desc" else col.asc())
         stmt = stmt.limit(page_size).offset((page - 1) * page_size)
         rows = list((await session.scalars(stmt)).all())
-        return rows, total
+        return rows, (total if with_total else len(rows))
 
     async def _assert_unique(
         self,

@@ -15,6 +15,7 @@ from app.api import router as rack_router
 from app.config import settings
 from app.db import dispose_engine, engine
 from app.errors import init_error_handlers
+from app.timing import ServerTimingMiddleware
 from app.schemas import HealthOut
 
 logging.basicConfig(
@@ -27,9 +28,33 @@ log = logging.getLogger("rack")
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     log.info("startup service=%s env=%s", settings.SERVICE_NAME, settings.ENVIRONMENT)
+    if settings.RACK_AUTO_ALLOCATE:
+        await _auto_allocate()
     yield
     await dispose_engine()
     log.info("shutdown")
+
+
+async def _auto_allocate() -> None:
+    """Best-effort: place any not-yet-stored SAP outward lots into empty trays.
+
+    Never blocks startup — if Masterdata is unreachable it just logs and the
+    operator can run ``POST /api/v1/rack/allocate`` later.
+    """
+    try:
+        from app import allocation
+        from app.db import SessionLocal
+
+        async with SessionLocal() as session:
+            result = await allocation.allocate(session)
+            await session.commit()
+        log.info(
+            "auto-allocate: %s trays placed across %s lines",
+            result.trays_placed,
+            result.lines_placed,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("auto-allocate skipped: %s", exc)
 
 
 def create_app() -> FastAPI:
@@ -50,17 +75,26 @@ def create_app() -> FastAPI:
         )
 
     init_error_handlers(app)
+    app.add_middleware(ServerTimingMiddleware)  # docs/10 §7
 
     @app.get("/healthz", response_model=HealthOut, include_in_schema=False)
-    @app.get(f"{settings.API_PREFIX}/health", response_model=HealthOut, tags=["meta"])
     async def health() -> HealthOut:
+        """Liveness (docs/10 §4.1): the process is up. No dependency checks —
+        compose probes this every 10 s and a DB round-trip per probe is
+        avoidable load. Readiness with the DB check is ``/readyz`` below."""
+        return HealthOut(status="ok", service=settings.SERVICE_NAME, database="not-checked")
+
+    @app.get("/readyz", response_model=HealthOut, include_in_schema=False)
+    @app.get(f"{settings.API_PREFIX}/health", response_model=HealthOut, tags=["meta"])
+    async def ready() -> HealthOut:
+        """Readiness (docs/10 §4.1): database reachable."""
         db_ok = "ok"
         try:
             async with engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
         except Exception as exc:  # noqa: BLE001
             db_ok = f"error: {exc.__class__.__name__}"
-        return HealthOut(status="ok", service=settings.SERVICE_NAME, database=db_ok)
+        return HealthOut(status="ok" if db_ok == "ok" else "degraded", service=settings.SERVICE_NAME, database=db_ok)
 
     app.include_router(rack_router, prefix=settings.API_PREFIX)
     init_admin(app)  # browser DB admin at /rack-admin

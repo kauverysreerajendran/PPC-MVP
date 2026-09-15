@@ -38,7 +38,10 @@ class Settings(BaseSettings):
     # elsewhere this password gates it.
     RACK_ADMIN_PASSWORD: str = "rack-admin"  # noqa: S105
 
-    # --- database (this service's OWN database) ---
+    # --- database ---
+    # Points at the single shared PostgreSQL database (see repo-root `.env`).
+    # This service owns and migrates only its `rack` schema there — never
+    # another service's schema.
     RACK_DATABASE_URL: PostgresDsn
     RACK_DB_POOL_SIZE: int = 5
     RACK_DB_MAX_OVERFLOW: int = 10
@@ -48,9 +51,23 @@ class Settings(BaseSettings):
     # Used to validate `occupied_by_model` against the model master when a slot
     # is occupied. Best-effort: if the Masterdata service is unreachable the
     # write still succeeds (see BLUEPRINT §12 — no cross-service DB access).
-    RACK_MASTERDATA_API_BASE_URL: AnyHttpUrl = "http://localhost:8002/api/v1/masterdata"  # type: ignore[assignment]
-    RACK_MASTERDATA_TOKEN: str = ""  # optional bearer for the Masterdata service
+    RACK_MASTERDATA_API_BASE_URL: AnyHttpUrl = "http://127.0.0.1:8002/api/v1/masterdata"  # type: ignore[assignment]
+    # Optional static bearer for the Masterdata service. When blank the service
+    # mints its own short-lived HS256 token from the shared SECRET_KEY.
+    RACK_MASTERDATA_TOKEN: str = ""
+    RACK_SERVICE_SUBJECT: str = "rack-service"  # `sub` on the minted token
     RACK_VALIDATE_MODEL: bool = False  # opt-in cross-service model check on occupy
+    # Pull SAP outward lines from Masterdata and place them into empty rack
+    # trays on startup (best-effort, idempotent). Off by default — trigger it
+    # explicitly with `POST /api/v1/rack/allocate`.
+    RACK_AUTO_ALLOCATE: bool = False
+
+    # --- Status service (over HTTP — never its DB) ---
+    # Placing received pieces reports the line's rack status (Partially placed /
+    # Placed) here; the Status service is the single source of truth.
+    RACK_STATUS_API_BASE_URL: AnyHttpUrl = "http://127.0.0.1:8004/api/v1/status"  # type: ignore[assignment]
+    # Optional static bearer; when blank a short-lived token is minted from SECRET_KEY.
+    RACK_STATUS_TOKEN: str = ""
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod

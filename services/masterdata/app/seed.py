@@ -22,7 +22,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import MasterModel, SapOutward, SapOutwardStatus, Vendor
+from app.models import MasterModel, SapOutward, Vendor
 
 log = logging.getLogger("masterdata.seed")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
@@ -140,17 +140,11 @@ async def run() -> None:
                     setattr(si, k, val)
                 updated += 1
 
-        await session.flush()
-
-        # Every outward line carries a status row (NEW = "Yet to Dispatch").
-        have_status = {
-            r for r in (await session.scalars(select(SapOutwardStatus.sap_outward_id))).all()
-        }
+        # Every outward line carries a status; lines arrive from SAP already
+        # dispatched (revision 0021). Since revision 0020 it is a column on the line.
         for si in (await session.scalars(select(SapOutward))).all():
-            if si.id not in have_status:
-                session.add(
-                    SapOutwardStatus(sap_outward_id=si.id, status=si.outward_status or "NEW")
-                )
+            if not si.outward_status:
+                si.outward_status = "DISPATCHED"
 
         await session.commit()
         log.info(

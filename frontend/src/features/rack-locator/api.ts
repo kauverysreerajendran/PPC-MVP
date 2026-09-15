@@ -1,5 +1,14 @@
 import { api, type RequestOptions } from "@/lib/api/client";
-import type { LocateResult, RackDetail, ResolveResult, Topology } from "./types";
+import type {
+  FindResult,
+  LocateResult,
+  PlaceRequest,
+  PlaceResult,
+  PlacedResult,
+  RackDetail,
+  ResolveResult,
+  Topology,
+} from "./types";
 
 /**
  * Read side of the Rack microservice, via the gateway path `/api/v1/rack`.
@@ -35,6 +44,12 @@ export const rackLocatorApi = {
     opts: RequestOptions = {},
   ) => api.get<ResolveResult>("/rack/resolve", { ...opts, query: { ...params } }),
 
+  /** Every tray a model / lot / SAP document currently occupies. */
+  find: (
+    params: { q: string; warehouse_code?: string; aisle_code?: string },
+    opts: RequestOptions = {},
+  ) => api.get<FindResult>("/rack/find", { ...opts, query: { ...params } }),
+
   /** Place a model in a tray. */
   occupy: (slotId: string, body: { occupied_by_model: string; notes?: string }) =>
     api.post(`/rack/slots/${slotId}/occupy`, body, {
@@ -42,4 +57,14 @@ export const rackLocatorApi = {
     }),
 
   release: (slotId: string) => api.post(`/rack/slots/${slotId}/release`, {}),
+
+  /** Trays already holding received pieces of one SAP line. */
+  placed: (sapReferenceId: string, opts: RequestOptions = {}) =>
+    api.get<PlacedResult>(`/rack/place/${encodeURIComponent(sapReferenceId)}`, opts),
+
+  /** Store received pieces in the confirmed trays; reports the rack status. */
+  place: (body: PlaceRequest) =>
+    api.post<PlaceResult>("/rack/place", body, {
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+    }),
 };

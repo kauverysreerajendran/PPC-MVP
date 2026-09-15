@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { rackApi } from "./api";
 import type { Page, RackListParams, RackSlot } from "./types";
+import { transactionalQueryOptions, usePollingInterval } from "@/lib/polling";
 
 const keys = {
   all: ["rack", "slots"] as const,
@@ -10,13 +11,12 @@ const keys = {
 };
 
 export function useRackList(params: RackListParams = {}) {
+  const interval = usePollingInterval();
   return useQuery<Page<RackSlot>>({
     queryKey: keys.list(params),
     queryFn: ({ signal }) => rackApi.list(params, { signal }),
-    staleTime: 2_000,
-    refetchInterval: 5_000,
-    refetchIntervalInBackground: false,
     placeholderData: (prev) => prev,
+    ...transactionalQueryOptions(interval),
   });
 }
 

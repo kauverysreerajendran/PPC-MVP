@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-const API_BASE = process.env.API_INTERNAL_BASE_URL ?? "http://localhost:8000/api/v1";
+const API_BASE = process.env.API_INTERNAL_BASE_URL ?? "http://127.0.0.1:8000/api/v1";
 
 async function endSession(req: NextRequest) {
   const refresh = req.cookies.get("refresh_token")?.value;

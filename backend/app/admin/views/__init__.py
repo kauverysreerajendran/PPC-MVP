@@ -18,14 +18,21 @@ from __future__ import annotations
 
 from app.admin.views.audit_logs import AuditLogAdmin
 from app.admin.views.projects import ProjectAdmin
+from app.admin.views.services import build_service_views
 from app.admin.views.sessions import RefreshTokenAdmin
 from app.admin.views.users import UserAdmin
 
-ADMIN_VIEWS = [
+#: Tables owned by this app (the `public` schema).
+OWN_VIEWS = [
     UserAdmin,
     RefreshTokenAdmin,
     ProjectAdmin,
     AuditLogAdmin,
 ]
 
-__all__ = ["ADMIN_VIEWS"]
+# Tables owned by the sap / masterdata / rack services. They live in dedicated
+# schemas of this same database, so one panel serves the whole system instead of
+# four panels on four ports. See app/admin/views/services.py.
+ADMIN_VIEWS = [*OWN_VIEWS, *build_service_views()]
+
+__all__ = ["ADMIN_VIEWS", "OWN_VIEWS"]

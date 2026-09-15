@@ -39,11 +39,27 @@ def needs_rehash(hashed: str) -> bool:
         return True
 
 
-def create_access_token(*, subject: str, role: str, extra: dict[str, Any] | None = None) -> str:
+def create_access_token(
+    *,
+    subject: str,
+    role: str,
+    email: str | None = None,
+    name: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> str:
+    """Signed access JWT.
+
+    Besides ``sub``/``role`` it carries the display identity (``email``, ``name``)
+    so a server-rendered shell can show the signed-in user without calling
+    ``/auth/me`` on every navigation. Claims only — nothing here is used for
+    authorization beyond ``sub``/``role``, which are unchanged.
+    """
     now = datetime.now(UTC)
     payload: dict[str, Any] = {
         "sub": subject,
         "role": role,
+        "email": email,
+        "name": name,
         "type": "access",
         "jti": str(uuid.uuid4()),
         "iat": int(now.timestamp()),

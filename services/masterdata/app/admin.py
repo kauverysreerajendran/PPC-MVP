@@ -21,9 +21,9 @@ from app.models import (
     Location,
     MasterModel,
     OutwardStatusMaster,
+    MovementTypeMaster,
     PlatingColor,
     SapOutward,
-    SapOutwardStatus,
     Tray,
     Vendor,
 )
@@ -166,6 +166,10 @@ class SapOutwardAdmin(ModelView, model=SapOutward):
         SapOutward.back_case_trays,
         SapOutward.outward_status,
         SapOutward.quantity,
+        SapOutward.received_pieces,
+        SapOutward.received_qty,
+        SapOutward.inward_status,
+        SapOutward.outward_status_note,
         SapOutward.movement_type,
         SapOutward.status,
     ]
@@ -203,20 +207,17 @@ class OutwardStatusMasterAdmin(ModelView, model=OutwardStatusMaster):
     page_size = 50
 
 
-class SapOutwardStatusAdmin(ModelView, model=SapOutwardStatus):
-    name = "SAP Outward Status"
-    name_plural = "SAP Outward Statuses"
+class MovementTypeMasterAdmin(ModelView, model=MovementTypeMaster):
+    name = "Movement Type"
+    name_plural = "Movement Type Master"
     column_list = [
-        SapOutwardStatus.sap_outward_id,
-        SapOutwardStatus.status,
-        SapOutwardStatus.note,
-        SapOutwardStatus.updated_at,
+        MovementTypeMaster.code,
+        MovementTypeMaster.description,
+        MovementTypeMaster.sort_order,
+        MovementTypeMaster.status,
     ]
-    column_searchable_list = [SapOutwardStatus.status]
-    column_default_sort = ("updated_at", True)
-    column_formatters = {
-        SapOutwardStatus.updated_at: lambda o, _a: _dt(o.updated_at),
-    }
+    column_searchable_list = [MovementTypeMaster.code, MovementTypeMaster.description]
+    column_default_sort = ("sort_order", False)
     page_size = 50
 
 
@@ -237,6 +238,6 @@ def init_admin(app: FastAPI) -> None:
         BoxAdmin,
         SapOutwardAdmin,
         OutwardStatusMasterAdmin,
-        SapOutwardStatusAdmin,
+        MovementTypeMasterAdmin,
     ):
         admin.add_view(view)

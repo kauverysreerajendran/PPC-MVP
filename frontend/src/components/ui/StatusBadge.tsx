@@ -1,6 +1,6 @@
 import { cn } from "@/lib/cn";
 
-export type StatusTone = "neutral" | "info" | "success" | "warning" | "danger" | "progress";
+export type StatusTone = "neutral" | "info" | "success" | "warning" | "orange" | "danger" | "progress";
 
 export type StatusKey =
   | "pending"
@@ -40,6 +40,8 @@ const TONES: Record<StatusTone, string> = {
     "bg-[var(--color-success-bg)] text-[var(--color-success)] ring-[color-mix(in_srgb,var(--color-success)_30%,transparent)]",
   warning:
     "bg-[var(--color-warning-bg)] text-[var(--color-warning)] ring-[color-mix(in_srgb,var(--color-warning)_30%,transparent)]",
+  orange:
+    "bg-[var(--color-orange-bg)] text-[var(--color-orange)] ring-[color-mix(in_srgb,var(--color-orange)_30%,transparent)]",
   danger:
     "bg-[var(--color-danger-bg)] text-[var(--color-danger)] ring-[color-mix(in_srgb,var(--color-danger)_30%,transparent)]",
   progress:

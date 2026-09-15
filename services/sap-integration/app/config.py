@@ -40,7 +40,10 @@ class Settings(BaseSettings):
     # password gates it.
     SAP_ADMIN_PASSWORD: str = "sap-admin"  # noqa: S105
 
-    # --- database (this service's OWN database) ---
+    # --- database ---
+    # Points at the single shared PostgreSQL database (see repo-root `.env`).
+    # This service owns and migrates only its `sap` schema there — never
+    # another service's schema.
     SAP_DATABASE_URL: PostgresDsn
     SAP_DB_POOL_SIZE: int = 5
     SAP_DB_MAX_OVERFLOW: int = 10
@@ -51,6 +54,23 @@ class Settings(BaseSettings):
     # the SAP interface (OData / BAPI / RFC).  TITAN_SAP_*_TO_BE_CONFIRMED.
     SAP_PROVIDER: str = "mock"
     SAP_SOURCE_SYSTEM: str = "SAP-ECC"
+
+    # --- automatic pull (app/sync_loop.py) ---
+    # The service pulls on its own schedule so the SAP Outward screen follows
+    # SAP without anyone pressing a button. On by default: the default provider
+    # is `mock`, so nothing reaches a real SAP system until a real provider is
+    # configured. Set false to leave pulls entirely manual.
+    SAP_AUTO_SYNC_ENABLED: bool = True
+    SAP_AUTO_SYNC_SECONDS: int = 300
+    SAP_AUTO_SYNC_COUNT: int = 20
+    # Give the process (and the database) a moment before the first pull.
+    SAP_AUTO_SYNC_START_DELAY_SECONDS: int = 15
+
+    # --- Status service (read-only, over HTTP — never its DB) ---
+    # Used to split the records list by a line's status (e.g. outward Received).
+    SAP_STATUS_API_BASE_URL: str = "http://127.0.0.1:8004/api/v1/status"
+    # Optional static bearer; when blank a short-lived token is minted from SECRET_KEY.
+    SAP_STATUS_TOKEN: str = ""
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod

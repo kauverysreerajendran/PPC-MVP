@@ -29,7 +29,7 @@ export function AisleMap({
 
   return (
     <section
-      className="rounded-[var(--radius-md)] border border-border bg-surface"
+      className="rounded-[var(--radius-lg)] border border-border bg-surface shadow-[var(--shadow-sm)]"
       aria-label={`Aisle ${aisle.aisle_code}`}
     >
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">

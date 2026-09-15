@@ -1,4 +1,4 @@
-"""ORM models for the `rack` database.
+"""ORM models for the `rack` schema (single shared database).
 
 Two tables, owned exclusively by this service:
 
@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -41,6 +42,7 @@ from sqlalchemy import (
     Index,
     Integer,
     MetaData,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -64,8 +66,12 @@ STATUS_VALUES = ("active", "inactive")
 SLOT_STATES = ("empty", "occupied", "reserved", "blocked")
 
 
+#: schema this service owns inside the single shared PostgreSQL database
+SCHEMA = "rack"
+
+
 class Base(DeclarativeBase):
-    metadata = MetaData(naming_convention=NAMING_CONVENTION)
+    metadata = MetaData(schema=SCHEMA, naming_convention=NAMING_CONVENTION)
 
 
 def _pk() -> Mapped[uuid.UUID]:
@@ -181,6 +187,12 @@ class Rack(Base, TimestampMixin, StatusMixin):
         Index("ix_rack_date_of_occupied", "date_of_occupied"),
         Index("ix_rack_slot_state", "slot_state"),
         Index("ix_rack_location", "warehouse_code", "aisle_code", "rack_code"),
+        Index("ix_rack_lot_no", "lot_no"),
+        Index("ix_rack_sap_reference_id", "sap_reference_id"),
+        CheckConstraint(
+            "placement_source IS NULL OR placement_source IN ('allocation','receiving')",
+            name="placement_source_allowed",
+        ),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -206,6 +218,16 @@ class Rack(Base, TimestampMixin, StatusMixin):
     date_of_occupied: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # --- what's in the tray, when it came from a SAP outward line ---
+    # ``qty`` is this tray's slice of the lot (the lot is split across trays);
+    # ``lot_no`` / ``sap_reference_id`` trace it back to the SAP outward document
+    # and double as the idempotency key for the allocator.
+    qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 3), nullable=True)
+    lot_no: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sap_reference_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: how the tray was filled — NULL / "allocation" = the outward allocator,
+    #: "receiving" = a received piece placed from SAP Inward (``POST /place``)
+    placement_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     @property

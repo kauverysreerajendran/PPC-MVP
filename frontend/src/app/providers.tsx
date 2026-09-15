@@ -4,7 +4,6 @@ import { useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ApiError } from "@/lib/api/errors";
 import { ToastProvider } from "@/components/ui";
-import { NetworkActivity } from "@/components/shell/NetworkActivity";
 
 export function Providers({ children }: { children: ReactNode }) {
   const [client] = useState(
@@ -17,8 +16,10 @@ export function Providers({ children }: { children: ReactNode }) {
               return failureCount < 2;
             },
             // Reflect out-of-band DB changes (e.g. edits made in the DB admin)
-            // as soon as the user comes back to the app or the network returns.
-            refetchOnWindowFocus: true,
+            // when the network returns. Refetch-on-focus is opted into per
+            // query in lib/polling.ts (docs/09 §8.1 — do not refetch what has
+            // not changed), so switching tabs does not re-run every query.
+            refetchOnWindowFocus: false,
             refetchOnReconnect: true,
           },
         },
@@ -26,10 +27,7 @@ export function Providers({ children }: { children: ReactNode }) {
   );
   return (
     <QueryClientProvider client={client}>
-      <ToastProvider>
-        <NetworkActivity />
-        {children}
-      </ToastProvider>
+      <ToastProvider>{children}</ToastProvider>
     </QueryClientProvider>
   );
 }

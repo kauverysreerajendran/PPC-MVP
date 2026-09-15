@@ -1,59 +1,38 @@
-import Link from "next/link";
-import { ChevronRight } from "lucide-react";
+"use client";
 
-/**
- * Decorative header band for the SAP Upload page — flowing teal wave field that
- * drifts slowly like ocean swell, floating dots, and the breadcrumb/title.
- *
- * Each wave <path> tiles every 400px and is drawn twice as wide as the viewBox,
- * so the CSS `ds-wave` drift (translateX by a 400px multiple) loops seamlessly.
- */
-export function SapPageBanner() {
+import { ChevronsDown, ChevronsUp } from "lucide-react";
+import { WaveBanner } from "@/components/ui/WaveBanner";
+import { SyncFromSapButton } from "./SyncFromSapButton";
+
+/** Header band for the SAP Outward grid — hosts the SAP pull and the
+ *  "Show more columns" toggle. */
+export function SapPageBanner({
+  expanded,
+  onToggle,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   return (
-    <div className="relative mb-4 min-h-[92px] w-full overflow-hidden rounded-[var(--radius-lg)] bg-gradient-to-r from-surface via-[color-mix(in_srgb,var(--color-primary)_7%,var(--color-surface))] to-[color-mix(in_srgb,var(--color-primary)_12%,var(--color-surface))]">
-      {/* ---- drifting ocean waves ---- */}
-      <svg
-        className="pointer-events-none absolute inset-0 h-full w-full"
-        viewBox="0 0 1200 150"
-        preserveAspectRatio="none"
-        aria-hidden
-      >
-        <path
-          className="ds-wave ds-wave-2"
-          d="M0 92 C 100 62, 300 122, 400 92 C 500 62, 700 122, 800 92 C 900 62, 1100 122, 1200 92 C 1300 62, 1500 122, 1600 92 C 1700 62, 1900 122, 2000 92 C 2100 62, 2300 122, 2400 92 L 2400 150 L 0 150 Z"
-          fill="color-mix(in srgb, var(--color-primary) 12%, transparent)"
-        />
-        <path
-          className="ds-wave ds-wave-1"
-          d="M0 110 C 120 84, 280 138, 400 110 C 520 82, 680 138, 800 110 C 920 84, 1080 138, 1200 110 C 1320 82, 1480 138, 1600 110 C 1720 84, 1880 138, 2000 110 C 2120 82, 2280 138, 2400 110 L 2400 150 L 0 150 Z"
-          fill="color-mix(in srgb, var(--color-primary) 18%, transparent)"
-        />
-        <path
-          className="ds-wave ds-wave-3"
-          d="M0 72 C 100 52, 300 100, 400 72 C 500 44, 700 100, 800 72 C 900 52, 1100 100, 1200 72 C 1300 44, 1500 100, 1600 72 C 1700 52, 1900 100, 2000 72 C 2100 44, 2300 100, 2400 72"
-          fill="none"
-          stroke="color-mix(in srgb, var(--color-primary) 15%, transparent)"
-          strokeWidth={1.15}
-        />
-      </svg>
-
-
-      {/* ---- content ---- */}
-      <div className="relative flex items-center justify-between gap-4 px-5 py-3.5 sm:px-6">
-        <div className="min-w-0 space-y-1">
-          <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-xs">
-            <Link
-              href="/sap-upload"
-              className="font-medium text-primary hover:text-[var(--color-primary-hover)]"
-            >
-              SAP Outward
-            </Link>
-            <ChevronRight className="size-3 text-text-muted" aria-hidden />
-            <span className="text-text-secondary">Outward Records</span>
-          </nav>
-          <h1 className="text-xl font-semibold tracking-tight">SAP Outward</h1>
-        </div>
-      </div>
-    </div>
+    <WaveBanner
+      breadcrumb={[
+        { label: "SAP Outward", href: "/sap-outward" },
+        { label: "Outward Records" },
+      ]}
+      title="SAP Outward"
+      actions={
+        <>
+          <SyncFromSapButton />
+          <button
+            type="button"
+            onClick={onToggle}
+            className="ds-focus-ring inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-border-strong bg-surface px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:border-primary hover:text-primary"
+          >
+            {expanded ? <ChevronsUp className="size-3.5" /> : <ChevronsDown className="size-3.5" />}
+            {expanded ? "Show fewer columns" : "Show more columns"}
+          </button>
+        </>
+      }
+    />
   );
 }

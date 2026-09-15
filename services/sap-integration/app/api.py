@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,13 +35,30 @@ async def list_records(
     search: str | None = Query(None),
     sort: str = Query("transaction_date"),
     direction: str = Query("desc", pattern="^(asc|desc)$"),
+    refs: str | None = Query(
+        None,
+        max_length=8000,
+        description="Comma-separated sap_reference_ids to include, OR'ed with `search`.",
+    ),
+    status_stage: Literal["outward", "inward", "rack"] | None = Query(
+        None, description="Split by a status held in the Status service (with status_code)."
+    ),
+    status_code: str | None = Query(None, max_length=32),
+    status_match: Literal["include", "exclude"] = Query(
+        "include", description="include = only lines in that status; exclude = all others"
+    ),
 ) -> Page[SapInwardRecordOut]:
+    ref_list = [r.strip() for r in refs.split(",") if r.strip()][:200] if refs else None
     return await SapService(session).list_records(
         page=page,
         page_size=page_size,
         search=search,
         sort=sort,
         direction=direction,
+        refs=ref_list,
+        status_stage=status_stage,
+        status_code=status_code,
+        status_match=status_match,
     )
 
 

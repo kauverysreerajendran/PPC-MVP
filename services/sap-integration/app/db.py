@@ -1,4 +1,8 @@
-"""Async engine + session factory for `sap_db` — this service's private database."""
+"""Async engine + session factory for the SAP Integration service.
+
+Connects to the single shared PostgreSQL database; all of this service's
+tables live in the `sap` schema (see `app.models.SCHEMA`).
+"""
 
 from __future__ import annotations
 

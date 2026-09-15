@@ -38,7 +38,10 @@ class Settings(BaseSettings):
     # elsewhere this password gates it.
     MASTERDATA_ADMIN_PASSWORD: str = "masterdata-admin"  # noqa: S105
 
-    # --- database (this service's OWN database) ---
+    # --- database ---
+    # Points at the single shared PostgreSQL database (see repo-root `.env`).
+    # This service owns and migrates only its `masterdata` schema there —
+    # never another service's schema.
     MASTERDATA_DATABASE_URL: PostgresDsn
     MASTERDATA_DB_POOL_SIZE: int = 5
     MASTERDATA_DB_MAX_OVERFLOW: int = 10
@@ -47,8 +50,15 @@ class Settings(BaseSettings):
     # --- SAP Integration service (read-only, over HTTP — never its DB) ---
     # Used by `python -m app.seed` to import distinct vendors / models from the
     # real SAP inward feed into the masterdata tables. No cross-service DB access.
-    MASTERDATA_SAP_API_BASE_URL: AnyHttpUrl = "http://localhost:8001/api/v1/sap"  # type: ignore[assignment]
+    MASTERDATA_SAP_API_BASE_URL: AnyHttpUrl = "http://127.0.0.1:8001/api/v1/sap"  # type: ignore[assignment]
     MASTERDATA_SEED_TOKEN: str = ""  # optional bearer for the SAP service
+
+    # --- Status service (over HTTP — never its DB) ---
+    # Receiving reports each line's outward / inward status change here; the
+    # Status service is the single source of truth for statuses.
+    MASTERDATA_STATUS_API_BASE_URL: AnyHttpUrl = "http://127.0.0.1:8004/api/v1/status"  # type: ignore[assignment]
+    # Optional static bearer; when blank a short-lived token is minted from SECRET_KEY.
+    MASTERDATA_STATUS_TOKEN: str = ""
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod

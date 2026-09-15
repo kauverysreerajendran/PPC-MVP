@@ -37,16 +37,20 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import allocation as alloc
 from app import models as m
 from app import schemas as s
 from app import topology as t
+from app.config import settings
 from app.crud import CrudRepository
 from app.db import get_session
-from app.errors import ConflictError
+from app.errors import ConflictError, NotFoundError
 from app.masterdata_client import model_exists
 from app.security import Principal, current_principal
+from app.status_client import report as report_status
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 User = Annotated[Principal, Depends(current_principal)]
@@ -274,6 +278,136 @@ async def resolve_location(
     )
 
 
+@router.get("/find", response_model=s.FindOut, tags=["rack-locator"])
+async def find_model(
+    session: Session,
+    _u: User,
+    q: Annotated[str, Query(min_length=1, max_length=64, description="model_no / lot_no / SAP ref")],
+    warehouse_code: str | None = Query(None),
+    aisle_code: str | None = Query(None),
+) -> Any:
+    """Every tray a model (or lot / SAP document) currently occupies."""
+    return await t.find_placements(
+        session, q, warehouse_code=warehouse_code, aisle_code=aisle_code
+    )
+
+
+# --- SAP outward allocation ----------------------------------------------
+@router.post("/allocate", response_model=s.AllocateOut, tags=["rack-locator"])
+async def allocate_outwards(payload: s.AllocateIn, session: Session, _u: User) -> Any:
+    """Pull SAP outward lines from Masterdata and place each lot into random
+    empty trays (front-case → front rows, back-case → back rows), splitting the
+    lot quantity across the trays. Idempotent per ``sap_reference_id``."""
+    return await alloc.allocate(
+        session,
+        warehouse_code=payload.warehouse_code,
+        aisle_code=payload.aisle_code,
+        reset=payload.reset,
+        dry_run=payload.dry_run,
+        seed=payload.seed,
+    )
+
+
+# --- receiving: store received pieces -----------------------------------------
+#: marks trays filled by receiving, as opposed to the outward allocation
+RECEIVING = "receiving"
+
+
+@router.get(
+    "/place/{sap_reference_id}", response_model=s.RackPlacedOut, tags=["rack-locator"]
+)
+async def placed_received(sap_reference_id: str, session: Session, _u: User) -> Any:
+    """Trays already holding received pieces of one SAP line — where placement
+    mode starts from."""
+    slots = (
+        await session.scalars(
+            select(m.Rack)
+            .where(
+                m.Rack.sap_reference_id == sap_reference_id,
+                m.Rack.placement_source == RECEIVING,
+                m.Rack.occupied.is_(True),
+            )
+            .order_by(m.Rack.date_of_occupied.asc())
+        )
+    ).all()
+    return s.RackPlacedOut(
+        sap_reference_id=sap_reference_id,
+        placed=len(slots),
+        slots=[s.RackOut.model_validate(x) for x in slots],
+    )
+
+
+@router.post("/place", response_model=s.RackPlaceOut, tags=["rack-locator"])
+async def place_received(payload: s.RackPlaceIn, session: Session, user: User) -> Any:
+    """Store received pieces of one SAP line in the trays the operator confirmed
+    (one piece per tray), then report the line's rack status — Partially placed
+    or Placed — to the Status service. Nothing is stored if that report fails."""
+    ids = [p.slot_id for p in payload.pieces]
+    if len(set(ids)) != len(ids):
+        raise ConflictError("the same tray was chosen twice")
+
+    already = (
+        await session.scalar(
+            select(func.count())
+            .select_from(m.Rack)
+            .where(
+                m.Rack.sap_reference_id == payload.sap_reference_id,
+                m.Rack.placement_source == RECEIVING,
+                m.Rack.occupied.is_(True),
+            )
+        )
+        or 0
+    )
+    left = payload.received_pieces - already
+    if len(ids) > left:
+        raise ConflictError(
+            f"{payload.sap_reference_id} has {max(left, 0)} received piece(s) left to place"
+        )
+    await _assert_model_known(payload.model_no)
+
+    now = datetime.now(UTC)
+    slots: list[m.Rack] = []
+    for piece in payload.pieces:
+        slot = await session.get(m.Rack, piece.slot_id, with_for_update=True)
+        if slot is None or slot.status != "active":
+            raise NotFoundError(f"tray {piece.slot_id}")
+        if slot.occupied or slot.slot_state not in ("empty", "reserved"):
+            raise ConflictError(f"tray {slot.code} is no longer free — pick another")
+        slot.occupied = True
+        slot.slot_state = "occupied"
+        slot.occupied_by_model = payload.model_no
+        slot.date_of_occupied = now
+        slot.qty = piece.qty
+        slot.lot_no = payload.lot_no
+        slot.sap_reference_id = payload.sap_reference_id
+        slot.placement_source = RECEIVING
+        slots.append(slot)
+    await session.flush()
+
+    total = already + len(slots)
+    code = "PLACED" if total >= payload.received_pieces else "PARTIALLY_PLACED"
+    await report_status(
+        [
+            {
+                "sap_reference_id": payload.sap_reference_id,
+                "stage": "rack",
+                "code": code,
+                "note": f"{total} of {payload.received_pieces} received pieces in racks",
+                "actor": user.subject or None,
+                "source": settings.RACK_SERVICE_SUBJECT,
+            }
+        ]
+    )
+    return s.RackPlaceOut(
+        sap_reference_id=payload.sap_reference_id,
+        placed_now=len(slots),
+        placed_total=total,
+        received_pieces=payload.received_pieces,
+        rack_status=code,
+        slots=[s.RackOut.model_validate(x) for x in slots],
+    )
+
+
 # --- slots ------------------------------------------------------------------
 class ListParams:
     def __init__(
@@ -402,6 +536,10 @@ async def release_slot(obj_id: uuid.UUID, session: Session, _u: User) -> Any:
     slot.slot_state = "empty"
     slot.occupied_by_model = None
     slot.date_of_occupied = None
+    slot.qty = None
+    slot.lot_no = None
+    slot.sap_reference_id = None
+    slot.placement_source = None
     await session.flush()
     return s.RackOut.model_validate(slot)
 

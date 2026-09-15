@@ -4,47 +4,37 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Menu, ScanLine, Search } from "lucide-react";
+import { Menu, ScanLine, Search, X } from "lucide-react";
 import logo from "@/assets/images/logo.png";
 import type { User } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
+import { useSearchStore } from "@/stores/search";
 import { Sidebar } from "./Sidebar";
 import { UserMenu } from "./UserMenu";
 import { NotificationMenu } from "./NotificationMenu";
 import { LiveIndicator } from "./LiveIndicator";
 
-const COLLAPSE_KEY = "titan.sidebar.collapsed";
-
 export function AppShell({ user, children }: { user: User; children: React.ReactNode }) {
   const pathname = usePathname();
-  const [collapsed, setCollapsed] = useState(false);
+  // The menu panel always starts minimized; the user expands it when needed.
+  const [collapsed, setCollapsed] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
-
-  useEffect(() => {
-    try {
-      setCollapsed(localStorage.getItem(COLLAPSE_KEY) === "1");
-    } catch {
-      /* ignore */
-    }
-  }, []);
 
   useEffect(() => setMobileOpen(false), [pathname]);
 
-  const toggle = () =>
-    setCollapsed((c) => {
-      const next = !c;
-      try {
-        localStorage.setItem(COLLAPSE_KEY, next ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
+  // Header search is page-scoped: a query typed on one screen must not keep
+  // filtering the next one.
+  const query = useSearchStore((s) => s.query);
+  const setQuery = useSearchStore((s) => s.setQuery);
+  const clearQuery = useSearchStore((s) => s.clear);
+  useEffect(() => clearQuery(), [pathname, clearQuery]);
+
+  const toggle = () => setCollapsed((c) => !c);
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-bg">
       {/* ---------- top header ---------- */}
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface px-3 sm:px-4">
+      <header className="relative z-20 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface px-3 sm:px-4">
         <button
           onClick={() => setMobileOpen(true)}
           aria-label="Open menu"
@@ -70,9 +60,25 @@ export function AppShell({ user, children }: { user: User; children: React.React
         <div className="relative hidden max-w-md flex-1 md:block">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-muted" />
           <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") clearQuery();
+            }}
+            aria-label="Search"
             placeholder="Search DC, PO, material, vendor, batch…"
-            className="h-9 w-full rounded-full border border-border bg-surface-2 pl-9 pr-3 text-sm placeholder:text-text-muted outline-none focus:border-primary focus:bg-surface focus:ring-2 focus:ring-[color-mix(in_srgb,var(--color-primary)_22%,transparent)]"
+            className="h-9 w-full rounded-full border border-border bg-surface-2 pl-9 pr-8 text-sm placeholder:text-text-muted outline-none focus:border-primary focus:bg-surface focus:ring-2 focus:ring-[color-mix(in_srgb,var(--color-primary)_22%,transparent)]"
           />
+          {query ? (
+            <button
+              type="button"
+              onClick={clearQuery}
+              aria-label="Clear search"
+              className="ds-focus-ring absolute right-2 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-full text-text-muted hover:bg-surface hover:text-text"
+            >
+              <X className="size-3.5" />
+            </button>
+          ) : null}
         </div>
 
         <div className="ml-auto flex items-center gap-3">

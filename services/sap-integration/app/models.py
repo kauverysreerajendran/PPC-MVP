@@ -1,4 +1,4 @@
-"""ORM models for `sap_db`.
+"""ORM models for the `sap` schema (single shared database).
 
 Two tables:
   * ``sap_sync_run``        — one row per SAP pull/sync attempt.
@@ -35,8 +35,12 @@ NAMING_CONVENTION = {
 }
 
 
+#: schema this service owns inside the single shared PostgreSQL database
+SCHEMA = "sap"
+
+
 class Base(DeclarativeBase):
-    metadata = MetaData(naming_convention=NAMING_CONVENTION)
+    metadata = MetaData(schema=SCHEMA, naming_convention=NAMING_CONVENTION)
 
 
 class TimestampMixin:

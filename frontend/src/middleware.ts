@@ -16,7 +16,7 @@ const PROTECTED_PREFIXES = [
   "/dashboard",
   "/scan",
   "/production",
-  "/sap-upload",
+  "/sap-outward",
   "/polishing-return",
   "/inspection",
   "/traceability",
@@ -26,7 +26,7 @@ const PROTECTED_PREFIXES = [
 ];
 
 const API_BASE =
-  process.env.API_INTERNAL_BASE_URL ?? "http://localhost:8000/api/v1";
+  process.env.API_INTERNAL_BASE_URL ?? "http://127.0.0.1:8000/api/v1";
 
 function isProtected(pathname: string): boolean {
   return PROTECTED_PREFIXES.some(

@@ -55,6 +55,12 @@ export interface ListRecordsParams {
   page?: number;
   page_size?: number;
   search?: string;
+  /** comma-separated sap_reference_ids matched elsewhere (Box UID in masterdata), OR'ed with search */
+  refs?: string;
+  /** split by a status held in the Status service (all three together) */
+  status_stage?: "outward" | "inward" | "rack";
+  status_code?: string;
+  status_match?: "include" | "exclude";
   sort?: string;
   direction?: "asc" | "desc";
 }

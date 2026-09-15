@@ -1,10 +1,10 @@
-"""Data-access layer for `sap_db`. Pure queries — no HTTP, no business rules."""
+"""Data-access layer for the `sap` schema. Pure queries — no HTTP, no business rules."""
 
 from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import SapInwardRecord, SapSyncRun
@@ -43,13 +43,37 @@ class SapRepository:
         search: str | None,
         sort: str,
         direction: str,
+        refs: list[str] | None = None,
+        only_refs: list[str] | None = None,
+        exclude_refs: list[str] | None = None,
     ) -> tuple[list[SapInwardRecord], int]:
-        stmt = select(SapInwardRecord)
+        where: list = []
+        # `refs` are sap_reference_ids another service matched for the same
+        # query (e.g. Box UID in masterdata) — OR'ed with the text search.
+        conds = []
         if search:
             like = f"%{search.strip()}%"
-            stmt = stmt.where(or_(*(col.ilike(like) for col in _SEARCHABLE)))
+            conds.extend(col.ilike(like) for col in _SEARCHABLE)
+        if refs:
+            conds.append(SapInwardRecord.sap_reference_id.in_(refs))
+        if conds:
+            where.append(or_(*conds))
+        # Status split (AND): keep only / drop the references another service
+        # reported in a status. `only_refs=[]` means "nothing is in that status".
+        if only_refs is not None:
+            where.append(
+                SapInwardRecord.sap_reference_id.in_(only_refs) if only_refs else false()
+            )
+        if exclude_refs:
+            where.append(SapInwardRecord.sap_reference_id.not_in(exclude_refs))
+        stmt = select(SapInwardRecord).where(*where)
 
-        total = await self.s.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+        # Count the table directly with the same predicates (docs/06 §3) — no
+        # subquery wrapper.
+        total = (
+            await self.s.scalar(select(func.count()).select_from(SapInwardRecord).where(*where))
+            or 0
+        )
 
         col = _SORTABLE.get(sort, SapInwardRecord.transaction_date)
         # Always break ties on sap_reference_id (SAP-YYMMDD-NNN, ascending with

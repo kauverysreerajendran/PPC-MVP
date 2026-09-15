@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
+import { ArrowDown, ArrowUp } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { EmptyState } from "./EmptyState";
 import { ErrorState } from "./ErrorState";
@@ -37,6 +37,7 @@ export function DataTable<T>({
   headerVariant = "default",
   columnDividers = false,
   emptyContent,
+  compact = false,
 }: {
   columns: Column<T>[];
   rows: T[];
@@ -58,6 +59,8 @@ export function DataTable<T>({
   columnDividers?: boolean;
   /** custom node rendered in the table body when there are no rows (overrides the default empty state). */
   emptyContent?: ReactNode;
+  /** dense grid: 12px body text and tighter row padding. */
+  compact?: boolean;
 }) {
   const [sort, setSort] = useState<SortState>(initialSort);
 
@@ -100,7 +103,7 @@ export function DataTable<T>({
         <EmptyState title={emptyTitle ?? "No records found"} description={emptyDescription} action={emptyAction} />
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-sm">
+          <table className={cn("w-full border-collapse", compact ? "text-xs" : "text-sm")}>
             <thead
               className={cn(
                 "tracking-wide",
@@ -111,10 +114,21 @@ export function DataTable<T>({
               )}
             >
               <tr>
-                {columns.map((c, ci) => (
+                {columns.map((c, ci) => {
+                  const dir = sort?.key === c.key ? sort.dir : null;
+                  return (
                   <th
                     key={c.key}
                     style={c.width ? { width: c.width } : undefined}
+                    aria-sort={
+                      c.sortable
+                        ? dir === "asc"
+                          ? "ascending"
+                          : dir === "desc"
+                            ? "descending"
+                            : "none"
+                        : undefined
+                    }
                     className={cn(
                       "whitespace-nowrap border-b border-border font-medium",
                       headerVariant === "solid" ? "px-2 py-2 leading-tight" : "px-3 py-2.5",
@@ -131,14 +145,13 @@ export function DataTable<T>({
                           onClick={() => toggleSort(c.key)}
                           className="ds-focus-ring rounded hover:text-text-secondary"
                         >
-                          {sort?.key === c.key ? (
-                            sort.dir === "asc" ? (
-                              <ArrowUp className="size-3" />
-                            ) : (
-                              <ArrowDown className="size-3" />
-                            )
+                          {dir === "desc" ? (
+                            <ArrowDown className="size-3 text-primary" aria-hidden />
                           ) : (
-                            <ChevronsUpDown className="size-3 opacity-50" />
+                            <ArrowUp
+                              className={cn("size-3", dir === "asc" ? "text-primary" : "opacity-40")}
+                              aria-hidden
+                            />
                           )}
                         </button>
                       </span>
@@ -146,7 +159,8 @@ export function DataTable<T>({
                       <span className="select-text">{c.header}</span>
                     )}
                   </th>
-                ))}
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -177,7 +191,7 @@ export function DataTable<T>({
                       key={c.key}
                       className={cn(
                         "whitespace-nowrap text-text",
-                        headerVariant === "solid" ? "px-2 py-2" : "px-3 py-2.5",
+                        compact ? "px-2 py-1.5" : headerVariant === "solid" ? "px-2 py-2" : "px-3 py-2.5",
                         align(c.align),
                         columnDividers && ci > 0 && "border-l border-border",
                       )}

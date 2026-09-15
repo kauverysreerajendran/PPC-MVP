@@ -11,14 +11,11 @@ networks:
 volumes:
   postgres-data:
   redis-data:
-  sap-postgres-data:
-  masterdata-postgres-data:
-  rack-postgres-data:
 
 services:
   nginx:
     image: nginx:1.27-alpine
-    depends_on: [frontend, backend, sap-integration, masterdata, rack]
+    depends_on: [frontend, backend, sap-integration, masterdata, rack, status]
     ports:
       - "80:80"
     volumes:
@@ -63,14 +60,17 @@ services:
       timeout: 3s
       retries: 5
 
-  # --- SAP Integration microservice + its own database ---------------------
+  # --- SAP Integration microservice --------------------------------------
+  # Shares the single `postgres` database below; its tables live in the
+  # `sap` schema (see services/sap-integration/app/models.py: SCHEMA).
   sap-integration:
     build:
       context: ./services/sap-integration
       target: dev
     <<: *backend-env
     environment:
-      SAP_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@sap-postgres:5432/sap_db
+      SAP_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      SAP_STATUS_API_BASE_URL: http://status:8004/api/v1/status
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload"
@@ -78,7 +78,7 @@ services:
       - ./services/sap-integration:/app
     expose: ["8001"]
     depends_on:
-      sap-postgres: {condition: service_healthy}
+      postgres: {condition: service_healthy}
     networks: [internal]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/healthz').status==200 else 1)"]
@@ -86,30 +86,18 @@ services:
       timeout: 3s
       retries: 5
 
-  sap-postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: sap_db
-    volumes:
-      - sap-postgres-data:/var/lib/postgresql/data
-    networks: [internal]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d sap_db"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  # --- Masterdata microservice + its own database ------------------------
+  # --- Masterdata microservice --------------------------------------------
+  # Shares the single `postgres` database below; its tables live in the
+  # `masterdata` schema (see services/masterdata/app/models.py: SCHEMA).
   masterdata:
     build:
       context: ./services/masterdata
       target: dev
     <<: *backend-env
     environment:
-      MASTERDATA_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@masterdata-postgres:5432/masterdata
+      MASTERDATA_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       MASTERDATA_SAP_API_BASE_URL: http://sap-integration:8001/api/v1/sap
+      MASTERDATA_STATUS_API_BASE_URL: http://status:8004/api/v1/status
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload"
@@ -117,7 +105,7 @@ services:
       - ./services/masterdata:/app
     expose: ["8002"]
     depends_on:
-      masterdata-postgres: {condition: service_healthy}
+      postgres: {condition: service_healthy}
     networks: [internal]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8002/healthz').status==200 else 1)"]
@@ -125,30 +113,18 @@ services:
       timeout: 3s
       retries: 5
 
-  masterdata-postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: masterdata
-    volumes:
-      - masterdata-postgres-data:/var/lib/postgresql/data
-    networks: [internal]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d masterdata"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  # --- Rack microservice + its own database -----------------------------
+  # --- Rack microservice ---------------------------------------------------
+  # Shares the single `postgres` database below; its tables live in the
+  # `rack` schema (see services/rack/app/models.py: SCHEMA).
   rack:
     build:
       context: ./services/rack
       target: dev
     <<: *backend-env
     environment:
-      RACK_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@rack-postgres:5432/rack
+      RACK_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       RACK_MASTERDATA_API_BASE_URL: http://masterdata:8002/api/v1/masterdata
+      RACK_STATUS_API_BASE_URL: http://status:8004/api/v1/status
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload"
@@ -156,7 +132,7 @@ services:
       - ./services/rack:/app
     expose: ["8003"]
     depends_on:
-      rack-postgres: {condition: service_healthy}
+      postgres: {condition: service_healthy}
     networks: [internal]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8003/healthz').status==200 else 1)"]
@@ -164,20 +140,30 @@ services:
       timeout: 3s
       retries: 5
 
-  rack-postgres:
-    image: postgres:16-alpine
+  # --- Status microservice -------------------------------------------------
+  # Single source of truth for a SAP line's status per stage. Shares the single
+  # `postgres` database; its tables live in the `status` schema.
+  status:
+    build:
+      context: ./services/status
+      target: dev
+    <<: *backend-env
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: rack
+      STATUS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8004 --reload"
     volumes:
-      - rack-postgres-data:/var/lib/postgresql/data
+      - ./services/status:/app
+    expose: ["8004"]
+    depends_on:
+      postgres: {condition: service_healthy}
     networks: [internal]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d rack"]
-      interval: 5s
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8004/healthz').status==200 else 1)"]
+      interval: 10s
       timeout: 3s
-      retries: 10
+      retries: 5
 
   celery-worker:
     build:

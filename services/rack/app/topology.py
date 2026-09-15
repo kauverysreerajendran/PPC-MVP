@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import UTC, datetime
-from typing import Iterable
+from decimal import Decimal
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -361,6 +362,9 @@ async def rack_detail(
                             state=slot.slot_state,  # type: ignore[arg-type]
                             occupied_by_model=slot.occupied_by_model,
                             date_of_occupied=slot.date_of_occupied,
+                            qty=slot.qty,
+                            lot_no=slot.lot_no,
+                            sap_reference_id=slot.sap_reference_id,
                             location_name=slot.location_name,
                             notes=slot.notes,
                         )
@@ -558,18 +562,90 @@ async def resolve_code(
             m.Rack.tray_no == tray_no,
         )
     else:
-        # fall back to "where is this model?" / a location label
+        # fall back to "where is this model / lot / SAP doc?" or a location label
         term = f"%{query.strip()}%"
         stmt = stmt.where(
             or_(
                 m.Rack.occupied_by_model.ilike(term),
+                m.Rack.lot_no.ilike(term),
+                m.Rack.sap_reference_id.ilike(term),
                 m.Rack.location_name.ilike(term),
             )
-        ).order_by(m.Rack.rack_code, m.Rack.shelf_no, m.Rack.row_no, m.Rack.tray_no)
+        ).order_by(
+            m.Rack.occupied.desc(),
+            m.Rack.rack_code,
+            m.Rack.shelf_no,
+            m.Rack.row_no,
+            m.Rack.tray_no,
+        )
 
     slot = await session.scalar(stmt.limit(1))
     return s.ResolveOut(
         query=query,
         matched=slot is not None,
         slot=s.RackOut.model_validate(slot) if slot else None,
+    )
+
+
+async def find_placements(
+    session: AsyncSession,
+    query: str,
+    *,
+    warehouse_code: str | None = None,
+    aisle_code: str | None = None,
+) -> s.FindOut:
+    """Every occupied tray whose model / lot / SAP doc matches ``query``."""
+    q = query.strip()
+    exact = q.upper()
+    # decide which column the term is: a lot number, a SAP ref, else a model
+    field: str = "model_no"
+    col = m.Rack.occupied_by_model
+    if exact.startswith("LOT"):
+        field, col = "lot_no", m.Rack.lot_no
+    elif exact.startswith("SAP"):
+        field, col = "sap_reference_id", m.Rack.sap_reference_id
+
+    stmt = select(m.Rack).where(
+        m.Rack.status == "active",
+        m.Rack.occupied.is_(True),
+        or_(col.ilike(f"%{q}%"), func.upper(col) == exact),
+    )
+    if warehouse_code:
+        stmt = stmt.where(m.Rack.warehouse_code == warehouse_code)
+    if aisle_code:
+        stmt = stmt.where(m.Rack.aisle_code == aisle_code)
+    stmt = stmt.order_by(
+        m.Rack.warehouse_code,
+        m.Rack.aisle_code,
+        m.Rack.rack_code,
+        m.Rack.shelf_no,
+        m.Rack.row_no,
+        m.Rack.tray_no,
+    )
+
+    slots = (await session.scalars(stmt)).all()
+    total_qty = sum((s_.qty for s_ in slots if s_.qty is not None), start=Decimal(0))
+    return s.FindOut(
+        query=query,
+        field=field,  # type: ignore[arg-type]
+        count=len(slots),
+        total_qty=total_qty if slots else None,
+        placements=[
+            s.Placement(
+                id=slot.id,
+                code=slot.code,
+                warehouse_code=slot.warehouse_code,
+                aisle_code=slot.aisle_code,
+                rack_code=slot.rack_code,
+                shelf_no=slot.shelf_no,
+                row_no=slot.row_no,
+                tray_no=slot.tray_no,
+                occupied_by_model=slot.occupied_by_model,
+                qty=slot.qty,
+                lot_no=slot.lot_no,
+                sap_reference_id=slot.sap_reference_id,
+                date_of_occupied=slot.date_of_occupied,
+            )
+            for slot in slots
+        ],
     )

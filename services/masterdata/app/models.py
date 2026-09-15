@@ -1,4 +1,4 @@
-"""ORM models for the `masterdata` database.
+"""ORM models for the `masterdata` schema (single shared database).
 
 Tables, all owned exclusively by this service:
 
@@ -10,7 +10,15 @@ Tables, all owned exclusively by this service:
   * ``boxes``           — box master (barcode / box UID)
   * ``sap_outwards``    — SAP outward document lines, linked to the masters by
                           FK (``ON DELETE SET NULL``) while preserving the SAP
-                          business codes; also carries ``box_uid`` + ``tray_id``.
+                          business codes; also carries ``box_uid`` + ``tray_id``,
+                          the outward-status lifecycle and the receiving scans.
+
+``sap_outwards`` is deliberately ONE table. It previously had two satellites —
+``sap_outward_statuses`` (strictly 1:1, holding a status that was already
+mirrored onto ``sap_outwards.outward_status``) and ``sap_inward_scans`` (one row
+per scanned piece). Revision ``0020`` folded both in: the status note became the
+``outward_status_note`` column and the per-piece scans became the ``inward_scans``
+JSONB array. See docs/adr/0007-merge-sap-outward-satellites.md.
 """
 
 from __future__ import annotations
@@ -34,7 +42,7 @@ from sqlalchemy import (
     event,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 NAMING_CONVENTION = {
@@ -50,8 +58,12 @@ LOCATION_TYPES = ("WAREHOUSE", "RACK", "ROW", "SHELF", "BIN")
 OUTWARD_STATUS_VALUES = ("NEW", "ALLOCATED", "PACKED", "DISPATCHED", "HOLD")
 
 
+#: schema this service owns inside the single shared PostgreSQL database
+SCHEMA = "masterdata"
+
+
 class Base(DeclarativeBase):
-    metadata = MetaData(naming_convention=NAMING_CONVENTION)
+    metadata = MetaData(schema=SCHEMA, naming_convention=NAMING_CONVENTION)
 
 
 def _pk() -> Mapped[uuid.UUID]:
@@ -221,6 +233,22 @@ class OutwardStatusMaster(Base, TimestampMixin, StatusMixin):
     )
 
 
+class MovementTypeMaster(Base, TimestampMixin, StatusMixin):
+    """Master list of SAP movement-type codes — the lookup behind the SAP
+    Upload ``SAP`` column hover text. Editable from ``/masterdata-admin``."""
+
+    __tablename__ = "movement_type_master"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_movement_type_master_code"),
+        CheckConstraint("status IN ('active','inactive')", name="status_allowed"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    code: Mapped[str] = mapped_column(String(16), nullable=False)
+    description: Mapped[str] = mapped_column(String(255), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+
 class SapOutward(Base, TimestampMixin, StatusMixin):
     __tablename__ = "sap_outwards"
     __table_args__ = (
@@ -235,6 +263,13 @@ class SapOutward(Base, TimestampMixin, StatusMixin):
         Index("ix_sap_outwards_tray_id", "tray_id"),
         Index("ix_sap_outwards_tray_type", "tray_type"),
         Index("ix_sap_outwards_outward_status", "outward_status"),
+        Index("ix_sap_outwards_inward_status", "inward_status"),
+        CheckConstraint(
+            "inward_status IS NULL OR inward_status IN "
+            "('PENDING','PARTIAL','RECEIVED','SHORT','OVER')",
+            name="inward_status_allowed",
+        ),
+        CheckConstraint("received_pieces >= 0", name="received_pieces_non_negative"),
         CheckConstraint(
             "outward_status IS NULL OR outward_status IN "
             "('NEW','ALLOCATED','PACKED','DISPATCHED','HOLD')",
@@ -281,6 +316,30 @@ class SapOutward(Base, TimestampMixin, StatusMixin):
     front_case_trays: Mapped[int | None] = mapped_column(Integer, nullable=True)
     back_case_trays: Mapped[int | None] = mapped_column(Integer, nullable=True)
     outward_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    #: free-text note against the current outward status (was
+    #: ``sap_outward_statuses.note`` before revision 0020)
+    outward_status_note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # --- SAP inward (receiving verification) ---
+    # Front + back cases come back attached as one physical piece; the operator
+    # scans each piece and the count is tallied here. ``received_qty`` is the
+    # running received amount against the lot; shortage = quantity - received_qty.
+    received_pieces: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    received_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 3), nullable=True)
+    inward_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    inward_last_scan_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: One entry per physically scanned piece — was the ``sap_inward_scans``
+    #: table before revision 0020. Each entry:
+    #:   {id, box_uid, po_no, dc_no, piece_no, qty, scanned_by, scanned_at}
+    #: Always REPLACE this list (never mutate in place) so SQLAlchemy sees the
+    #: change; plain JSONB columns have no mutation tracking.
+    inward_scans: Mapped[list[dict]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
 
     # --- relational foreign keys to the masters (ON DELETE SET NULL) ---
     model_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -302,34 +361,6 @@ class SapOutward(Base, TimestampMixin, StatusMixin):
     location: Mapped[Location | None] = relationship(lazy="raise")
 
 
-class SapOutwardStatus(Base, TimestampMixin):
-    """Authoritative outward-status record, one row per ``sap_outwards`` line.
-
-    The ``sap_outwards.outward_status`` column is kept as a denormalised copy for
-    list filtering; this table is the source of truth and is where the status
-    lifecycle (currently only the automatic → ``DISPATCHED`` transition when a
-    valid Box UID is entered) is tracked.
-    """
-
-    __tablename__ = "sap_outward_statuses"
-    __table_args__ = (
-        UniqueConstraint("sap_outward_id", name="uq_sap_outward_statuses_sap_outward_id"),
-        CheckConstraint(
-            "status IN ('NEW','ALLOCATED','PACKED','DISPATCHED','HOLD')",
-            name="status_allowed",
-        ),
-    )
-
-    id: Mapped[uuid.UUID] = _pk()
-    sap_outward_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("sap_outwards.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    status: Mapped[str] = mapped_column(String(16), nullable=False)
-    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
-
-
 def _touch_updated_at(_mapper, _connection, target: TimestampMixin) -> None:
     target.updated_at = datetime.now(UTC)
 
@@ -342,7 +373,7 @@ for _model in (
     Tray,
     Box,
     OutwardStatusMaster,
+    MovementTypeMaster,
     SapOutward,
-    SapOutwardStatus,
 ):
     event.listen(_model, "before_update", _touch_updated_at)

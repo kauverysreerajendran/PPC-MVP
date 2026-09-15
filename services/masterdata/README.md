@@ -1,9 +1,10 @@
 # Masterdata Service
 
-A standalone microservice (BLUEPRINT §0). It owns the **`masterdata`** database
-and is reachable only through the gateway at **`/api/v1/masterdata`**. It never
-imports, and is never imported by, the monolith or any other service. Other
-services that need master data call this **API** — never the database.
+A standalone microservice (BLUEPRINT §0). It owns the **`masterdata`** schema
+inside the single shared PostgreSQL database and is reachable only through the
+gateway at **`/api/v1/masterdata`**. It never imports, and is never imported
+by, the monolith or any other service. Other services that need master data
+call this **API** — never its tables directly.
 
 ## Endpoints
 
@@ -24,7 +25,7 @@ Every resource has the same REST surface:
 Extra: `GET /locations/children?parent_location_id=` for the hierarchy;
 `sap-inwards` also filters by `vendor_id`, `model_id`, `movement_type`.
 
-## Database (`masterdata`)
+## Database (schema `masterdata`, in the shared database)
 
 | Table | Rows |
 |---|---|
@@ -43,8 +44,9 @@ Browse it in a browser: `/masterdata-admin` (SQLAdmin). Open on localhost in
 ## Local run (native, no Docker)
 
 ```bash
-# 1. one-time: create the database
-psql -h localhost -U postgres -c "CREATE DATABASE masterdata OWNER acme"
+# 1. one-time: the shared database already exists (repo-root `.env`'s
+#    POSTGRES_DB, e.g. `acme`) — nothing to create here. `alembic upgrade
+#    head` creates the `masterdata` schema inside it on first run.
 
 # 2. install deps (same interpreter as the monolith is fine)
 pip install -r services/masterdata/requirements.txt

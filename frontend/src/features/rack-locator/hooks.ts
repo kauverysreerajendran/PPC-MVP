@@ -2,14 +2,24 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { rackLocatorApi } from "./api";
-import type { LocateResult, RackDetail, ResolveResult, Topology } from "./types";
+import type {
+  FindResult,
+  LocateResult,
+  PlaceRequest,
+  PlacedResult,
+  RackDetail,
+  ResolveResult,
+  Topology,
+} from "./types";
+import { transactionalQueryOptions, usePollingInterval } from "@/lib/polling";
 
 /**
  * Every query polls, so the visualisation tracks the database: a tray occupied
  * or freed elsewhere, a rack added to the master or a shelf count changed shows
- * up on the next tick with nothing cached client-side.
+ * up on the next tick with nothing cached client-side. The interval is the
+ * shared, network-aware one from `lib/polling.ts`; the user's own actions
+ * still refresh instantly through the invalidations below.
  */
-const REFRESH_MS = 8_000;
 
 export const rackLocatorKeys = {
   all: ["rack-locator"] as const,
@@ -19,12 +29,11 @@ export const rackLocatorKeys = {
 };
 
 export function useTopology(params: { warehouse_code?: string; aisle_code?: string } = {}) {
+  const interval = usePollingInterval();
   return useQuery<Topology>({
     queryKey: rackLocatorKeys.topology(params),
     queryFn: ({ signal }) => rackLocatorApi.topology(params, { signal }),
-    staleTime: 2_000,
-    refetchInterval: REFRESH_MS,
-    refetchIntervalInBackground: false,
+    ...transactionalQueryOptions(interval),
     placeholderData: (prev) => prev,
   });
 }
@@ -32,13 +41,12 @@ export function useTopology(params: { warehouse_code?: string; aisle_code?: stri
 export function useRackDetail(
   params: { warehouse_code: string; aisle_code: string; rack_code: string } | null,
 ) {
+  const interval = usePollingInterval();
   return useQuery<RackDetail>({
     queryKey: rackLocatorKeys.rack(params ?? {}),
     queryFn: ({ signal }) => rackLocatorApi.rack(params!, { signal }),
     enabled: params !== null,
-    staleTime: 2_000,
-    refetchInterval: REFRESH_MS,
-    refetchIntervalInBackground: false,
+    ...transactionalQueryOptions(interval),
     placeholderData: (prev) => prev,
   });
 }
@@ -67,6 +75,20 @@ export function useResolveLocation() {
   });
 }
 
+/** Where is every tray of this model / lot? Runs on demand, then polls. */
+export function useFindPlacements(
+  params: { q: string; warehouse_code?: string; aisle_code?: string } | null,
+) {
+  const interval = usePollingInterval();
+  return useQuery<FindResult>({
+    queryKey: ["rack-locator", "find", params ?? {}],
+    queryFn: ({ signal }) => rackLocatorApi.find(params!, { signal }),
+    enabled: params !== null && params.q.trim().length > 0,
+    ...transactionalQueryOptions(interval),
+    placeholderData: (prev) => prev,
+  });
+}
+
 function useInvalidate() {
   const qc = useQueryClient();
   return () => qc.invalidateQueries({ queryKey: rackLocatorKeys.all });
@@ -86,5 +108,28 @@ export function useReleaseTray() {
   return useMutation({
     mutationFn: (id: string) => rackLocatorApi.release(id),
     onSuccess: done,
+  });
+}
+
+/** Received pieces of one SAP line already in trays (placement mode). */
+export function usePlacedPieces(sapReferenceId: string | null) {
+  const interval = usePollingInterval();
+  return useQuery<PlacedResult>({
+    queryKey: ["rack-locator", "placed", sapReferenceId],
+    queryFn: ({ signal }) => rackLocatorApi.placed(sapReferenceId as string, { signal }),
+    enabled: !!sapReferenceId,
+    ...transactionalQueryOptions(interval),
+  });
+}
+
+/** Store received pieces; refreshes the racks and the line's statuses. */
+export function usePlaceReceived() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: PlaceRequest) => rackLocatorApi.place(body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: rackLocatorKeys.all });
+      void qc.invalidateQueries({ queryKey: ["status"] });
+    },
   });
 }

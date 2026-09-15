@@ -1,8 +1,6 @@
-import type { Metadata } from "next";
-import { SapUploadView } from "@/features/sap/components/SapUploadView";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = { title: "SAP Outward" };
-
-export default function SapUploadPage() {
-  return <SapUploadView />;
+// Backward-compatible redirect: the SAP Outward page moved to /sap-outward.
+export default function SapUploadRedirect() {
+  redirect("/sap-outward");
 }

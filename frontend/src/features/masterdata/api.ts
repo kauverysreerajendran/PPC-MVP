@@ -42,6 +42,10 @@ export const patchOutwardByRef = (
 export const outwardStatusMasterApi = (opts: RequestOptions = {}) =>
   api.get<import("./types").OutwardStatusDef[]>("/masterdata/outward-status-master", opts);
 
+/** The SAP movement-type lookup (code → description), ordered by sort_order. */
+export const movementTypeMasterApi = (opts: RequestOptions = {}) =>
+  api.get<import("./types").MovementTypeDef[]>("/masterdata/movement-type-master", opts);
+
 export const locationChildrenApi = (parentId: string | null, opts: RequestOptions = {}) =>
   api.get<import("./types").MdLocation[]>("/masterdata/locations/children", {
     ...opts,

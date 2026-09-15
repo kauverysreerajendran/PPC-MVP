@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -152,6 +153,25 @@ class RackOccupy(BaseModel):
     notes: str | None = None
 
 
+class PlacePiece(BaseModel):
+    """One received piece going into one tray."""
+
+    slot_id: uuid.UUID
+    #: whole parts carried by this piece
+    qty: Decimal | None = Field(default=None, ge=0)
+
+
+class RackPlaceIn(BaseModel):
+    """Store received pieces of one SAP line into the trays the operator confirmed."""
+
+    sap_reference_id: str = Field(min_length=1, max_length=64)
+    model_no: Code
+    lot_no: str | None = Field(default=None, max_length=64)
+    #: pieces received so far — decides Partially placed vs Placed
+    received_pieces: int = Field(ge=1)
+    pieces: list[PlacePiece] = Field(min_length=1, max_length=200)
+
+
 class RackSlotState(BaseModel):
     """Flag a free slot as reserved / blocked, or return it to empty."""
 
@@ -173,6 +193,10 @@ class RackOut(ORMModel):
     occupied: bool
     occupied_by_model: str | None
     date_of_occupied: datetime | None
+    qty: Decimal | None = None
+    lot_no: str | None = None
+    sap_reference_id: str | None = None
+    placement_source: str | None = None
     notes: str | None
     status: str
     created_at: datetime
@@ -247,6 +271,9 @@ class TrayOut(BaseModel):
     state: SlotState
     occupied_by_model: str | None = None
     date_of_occupied: datetime | None = None
+    qty: Decimal | None = None
+    lot_no: str | None = None
+    sap_reference_id: str | None = None
     location_name: str | None = None
     notes: str | None = None
 
@@ -317,6 +344,89 @@ class ResolveOut(BaseModel):
     query: str
     matched: bool
     slot: RackOut | None = None
+
+
+# --- find every tray a model / lot occupies -------------------------------
+class Placement(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    id: uuid.UUID
+    code: str
+    warehouse_code: str
+    aisle_code: str
+    rack_code: str
+    shelf_no: int
+    row_no: int
+    tray_no: int
+    occupied_by_model: str | None
+    qty: Decimal | None
+    lot_no: str | None
+    sap_reference_id: str | None
+    date_of_occupied: datetime | None
+
+
+class FindOut(BaseModel):
+    query: str
+    field: Literal["model_no", "lot_no", "sap_reference_id"]
+    count: int
+    total_qty: Decimal | None
+    placements: list[Placement]
+
+
+# --- SAP outward allocation ----------------------------------------------
+class AllocateIn(BaseModel):
+    warehouse_code: str | None = None
+    aisle_code: str | None = None
+    #: free every tray a previous allocation filled, then re-place from scratch
+    reset: bool = False
+    #: compute the plan and report it without writing anything
+    dry_run: bool = False
+    #: fix the RNG so the same feed places into the same trays every run
+    seed: int | None = None
+
+
+class AllocationLine(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    sap_reference_id: str | None
+    lot_no: str | None
+    model_no: str
+    trays_requested: int
+    trays_placed: int
+    status: Literal["placed", "partial", "already-placed"]
+    locations: list[str]
+
+
+class AllocateOut(BaseModel):
+    generated_at: datetime
+    dry_run: bool
+    reset: bool
+    trays_freed: int
+    lines_seen: int
+    lines_placed: int
+    lines_partial: int
+    lines_skipped: int
+    trays_placed: int
+    empty_trays_left: int
+    lines: list[AllocationLine]
+
+
+class RackPlacedOut(BaseModel):
+    sap_reference_id: str
+    #: received pieces of this line already in trays
+    placed: int
+    slots: list[RackOut]
+
+
+class RackPlaceOut(BaseModel):
+    sap_reference_id: str
+    placed_now: int
+    #: received pieces of this line now in racks, including earlier placements
+    placed_total: int
+    received_pieces: int
+    #: the rack status reported to the Status service
+    rack_status: Literal["PARTIALLY_PLACED", "PLACED"]
+    slots: list[RackOut]
 
 
 class HealthOut(BaseModel):

@@ -1,5 +1,6 @@
 import { publicEnv } from "@/config/env";
 import { ApiError, NetworkError, type ApiErrorBody } from "./errors";
+import { parseServerTiming, recordSample } from "@/lib/perf";
 
 /**
  * Central typed API client. One place for:
@@ -9,6 +10,9 @@ import { ApiError, NetworkError, type ApiErrorBody } from "./errors";
  *  - timeout + abort
  *  - bounded retry for idempotent verbs
  *  - single refresh-and-retry on 401 (browser only)
+ *  - per-request timing sample (browser only) for lib/perf.ts — total wall time
+ *    plus the server's own `Server-Timing: app;dur=` so network vs server cost
+ *    is visible (docs/10 §7)
  *
  * Business logic never talks to fetch directly — it calls feature `api.ts` modules
  * which call this client.
@@ -27,35 +31,6 @@ export interface RequestOptions extends Omit<RequestInit, "body"> {
 }
 
 const IDEMPOTENT = new Set(["GET", "HEAD", "OPTIONS"]);
-
-/* ---------------------------------------------------------------------------
- * Global request-activity signal (browser only).
- *
- * The shell subscribes to this to render a buffering bar while requests are in
- * flight and to warn "Network is slow" when a request stays pending too long.
- * -------------------------------------------------------------------------- */
-
-/** A pending request is considered "slow" once it has been open this long. */
-export const SLOW_REQUEST_MS = 2500;
-
-export type ApiActivity = { inFlight: number; slow: boolean };
-type ActivityListener = (a: ApiActivity) => void;
-
-const activityListeners = new Set<ActivityListener>();
-let inFlight = 0;
-let slowInFlight = 0;
-
-function emitActivity(): void {
-  const snapshot: ApiActivity = { inFlight, slow: slowInFlight > 0 };
-  for (const listener of activityListeners) listener(snapshot);
-}
-
-/** Subscribe to API activity. Fires immediately with the current state. */
-export function onApiActivity(listener: ActivityListener): () => void {
-  activityListeners.add(listener);
-  listener({ inFlight, slow: slowInFlight > 0 });
-  return () => activityListeners.delete(listener);
-}
 
 function baseUrl(): string {
   if (typeof window === "undefined") {
@@ -119,20 +94,6 @@ async function raw<T>(method: string, path: string, opts: RequestOptions): Promi
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   if (signal) signal.addEventListener("abort", () => controller.abort(), { once: true });
 
-  // Track this request in the global activity signal (browser only).
-  const tracked = typeof window !== "undefined";
-  let markedSlow = false;
-  let slowTimer: ReturnType<typeof setTimeout> | undefined;
-  if (tracked) {
-    inFlight += 1;
-    slowTimer = setTimeout(() => {
-      markedSlow = true;
-      slowInFlight += 1;
-      emitActivity();
-    }, SLOW_REQUEST_MS);
-    emitActivity();
-  }
-
   const token = accessToken ?? tokenProvider?.get() ?? null;
 
   const init: RequestInit = {
@@ -152,13 +113,27 @@ async function raw<T>(method: string, path: string, opts: RequestOptions): Promi
   };
 
   let attempt = 0;
+  const browser = typeof window !== "undefined";
+  const sample = (res: Response | null, startedAt: number) => {
+    if (!browser) return;
+    recordSample({
+      path,
+      method,
+      status: res?.status ?? null,
+      total_ms: performance.now() - startedAt,
+      server_ms: res ? parseServerTiming(res.headers.get("server-timing")) : null,
+      at: Date.now(),
+    });
+  };
   try {
     for (;;) {
       let res: Response;
+      const startedAt = browser ? performance.now() : 0;
       try {
         res = await fetch(buildUrl(path, query), init);
       } catch (err) {
         if (controller.signal.aborted) throw err;
+        sample(null, startedAt);
         if (attempt++ < retries) {
           await backoff(attempt);
           continue;
@@ -177,22 +152,19 @@ async function raw<T>(method: string, path: string, opts: RequestOptions): Promi
       }
 
       if (!res.ok) {
+        sample(res, startedAt);
         if (res.status >= 500 && attempt++ < retries) {
           await backoff(attempt);
           continue;
         }
         throw await parseError(res);
       }
-      return decode<T>(res);
+      const decoded = await decode<T>(res);
+      sample(res, startedAt);
+      return decoded;
     }
   } finally {
     clearTimeout(timeout);
-    if (tracked) {
-      clearTimeout(slowTimer);
-      inFlight = Math.max(0, inFlight - 1);
-      if (markedSlow) slowInFlight = Math.max(0, slowInFlight - 1);
-      emitActivity();
-    }
   }
 }
 

@@ -20,9 +20,15 @@ export function ProjectStats() {
 
   return (
     <section className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-      <KpiCard label="Total Projects" value={dash ?? total} icon={<Boxes />} />
-      <KpiCard label="Active" value={dash ?? active} icon={<CircleDot />} tone="info" />
-      <KpiCard label="Archived" value={dash ?? archived} icon={<Archive />} tone="warning" />
+      <KpiCard label="Total Projects" value={dash ?? total} icon={<Boxes />} delayMs={0} />
+      <KpiCard label="Active" value={dash ?? active} icon={<CircleDot />} tone="info" delayMs={40} />
+      <KpiCard
+        label="Archived"
+        value={dash ?? archived}
+        icon={<Archive />}
+        tone="warning"
+        delayMs={80}
+      />
     </section>
   );
 }
