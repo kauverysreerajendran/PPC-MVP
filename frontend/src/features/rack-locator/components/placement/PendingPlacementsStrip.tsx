@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, ChevronUp, PackagePlus } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -19,15 +18,12 @@ const PAGE_SIZE = 25;
 const FETCH_SIZE = 100;
 
 /**
- * Collapsible strip on the plain Rack Locator (no `?place`): received lines
- * that still need a rack, so the operator does not have to go back to SAP
- * Inward to start the next one.
+ * The received lines that still need a rack.
+ *
+ * Shared by the header card's badge and the list below it, so the count and
+ * the rows can never disagree; both calls hit the same React Query cache.
  */
-export function PendingPlacementsStrip() {
-  const router = useRouter();
-  const [open, setOpen] = useState(true);
-  const [page, setPage] = useState(1);
-
+export function usePendingPlacements() {
   const lines = useInwardLines({ page_size: FETCH_SIZE });
   const received = useMemo(
     () => (lines.data?.items ?? []).filter((l) => l.received_pieces > 0),
@@ -40,36 +36,31 @@ export function PendingPlacementsStrip() {
       received.filter((l) => lineStatus.statusOf(l.sap_reference_id, "rack")?.code !== "PLACED"),
     [received, lineStatus],
   );
+  return { lines, lineStatus, pending, isLoading: lines.isLoading || lineStatus.isLoading };
+}
+
+/**
+ * The list body only — received lines that still need a rack, so the operator
+ * does not have to go back to SAP Inward to start the next one.
+ *
+ * The header this used to carry now lives as a badge in the Rack Locator's
+ * header card, which is what opens and closes this panel.
+ */
+export function PendingPlacementsPanel() {
+  const router = useRouter();
+  const [page, setPage] = useState(1);
+  const { lines, lineStatus, pending } = usePendingPlacements();
+
   const pageCount = Math.max(1, Math.ceil(pending.length / PAGE_SIZE));
   const pageRows = pending.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   return (
-    <div className="mb-4 rounded-[var(--radius-lg)] border border-border bg-surface shadow-[var(--shadow-sm)]">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="ds-focus-ring flex w-full items-center justify-between gap-2 px-4 py-3 text-left"
-      >
-        <span className="flex items-center gap-2 text-sm font-semibold text-text">
-          <PackagePlus className="size-4 text-primary" />
-          Received lots waiting for a rack
-          {!lines.isLoading && !lineStatus.isLoading ? (
-            <span className="rounded-full bg-surface-2 px-2 py-0.5 text-xs font-medium text-text-secondary">
-              {pending.length}
-            </span>
-          ) : null}
-        </span>
-        {open ? (
-          <ChevronUp className="size-4 text-text-muted" />
-        ) : (
-          <ChevronDown className="size-4 text-text-muted" />
-        )}
-      </button>
-
-      {open ? (
         <div className="border-t border-border px-4 py-3">
           {lines.isError ? (
-            <ErrorState title="Unable to load received lines" onRetry={() => void lines.refetch()} />
+            <ErrorState
+              title="Unable to load received lines"
+              onRetry={() => void lines.refetch()}
+            />
           ) : lines.isLoading || lineStatus.isLoading ? (
             <div className="space-y-2">
               {Array.from({ length: 3 }).map((_, i) => (
@@ -100,12 +91,14 @@ export function PendingPlacementsStrip() {
                         <StatusBadge label="Partially placed" tone="orange" />
                       ) : (
                         <span className="tabular-nums text-text-muted">
-                          {l.received_pieces} pcs received
+                          {l.received_pieces} {l.received_pieces === 1 ? "piece" : "pieces"} received
                         </span>
                       )}
                       <Button
                         size="sm"
-                        onClick={() => router.push(`/rack-locator?place=${encodeURIComponent(l.id)}`)}
+                        onClick={() =>
+                          router.push(`/rack-locator?place=${encodeURIComponent(l.id)}`)
+                        }
                       >
                         Place
                       </Button>
@@ -141,7 +134,5 @@ export function PendingPlacementsStrip() {
             </>
           )}
         </div>
-      ) : null}
-    </div>
   );
 }
