@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { Inbox, Lock, MapPin } from "lucide-react";
+import { Inbox, Lock, MapPin, TriangleAlert } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/DataTable";
+import { TableTabs } from "@/components/ui/TableTabs";
 import { Pagination } from "@/components/ui/Pagination";
 import { useToast } from "@/components/ui/Toast";
 import { usePageSize } from "@/lib/usePageSize";
@@ -17,11 +18,12 @@ import { patchOutwardByRef } from "@/features/masterdata/api";
 import { useMdList, useMovementTypeMaster, useOutwardStatusMaster } from "@/features/masterdata/hooks";
 import type { Box, SapOutward, Vendor } from "@/features/masterdata/types";
 import { OutwardDocumentHover } from "./OutwardDocumentHover";
+import { shortageSheetNote, shortageTrail } from "../shortageTrail";
 import { OutwardDocumentModal } from "./receipts/OutwardDocumentModal";
 import { vendorLabel, type OutwardDocKind } from "./receipts/types";
 import { SapPageBanner } from "./SapPageBanner";
 import { useSapRecords, useUpdateSapRecord } from "../hooks";
-import type { ListRecordsParams, SapInwardRecord } from "../types";
+import type { ListRecordsParams, RecordUpdate, SapInwardRecord } from "../types";
 
 /**
  * Outward status is derived, not chosen: entering a Box UID that exists as an
@@ -57,15 +59,158 @@ const CHIP_TONE: Record<StatusToneName, ChipTone> = {
 type OutwardTab = "open" | "completed";
 
 /**
- * Open = dispatched lines not yet received; Completed = received. The split is
- * the outward stage held by the Status service, applied server-side.
+ * Main Table = lines still to dispatch; Complete Table = lines dispatched
+ * against a Box UID, including the ones SAP Inward has since received (the
+ * outward stage moves DISPATCHED → RECEIVED, and both belong in Complete).
+ *
+ * The split is the outward stage held by the Status service, applied
+ * server-side: `/sap/records` asks it which references are in either status.
  */
+const DISPATCHED_CODES = "DISPATCHED,RECEIVED";
+
 const outwardSplit = (tab: OutwardTab) =>
   ({
     status_stage: "outward",
-    status_code: "RECEIVED",
+    status_code: DISPATCHED_CODES,
     status_match: tab === "completed" ? "include" : "exclude",
   }) as const;
+
+/**
+ * Why a Box UID would not save. A 404 is not about the box at all: masterdata
+ * has no outward line for the SAP reference and could not create one either, so
+ * saying "not in master" would send the operator hunting the wrong problem.
+ */
+function boxSaveMessage(err: unknown): string {
+  if (!(err instanceof ApiError)) return "Could not save — try again";
+  if (err.status === 404) {
+    return "No outward line for this SAP reference — run the masterdata sync";
+  }
+  return err.displayMessage || "Invalid Box UID";
+}
+
+/** True once the line carries a Box UID and masterdata calls it dispatched. */
+const isDispatched = (out: SapOutward | undefined) =>
+  !!out?.box_uid && out.outward_status === DISPATCHED;
+
+/**
+ * `sap_outwards.origin` of a shortage back-order: the new outward line SAP
+ * Inward raises for the balance a receiving entry did not account for
+ * (`lot − accepted − rejected`), so it can be dispatched again.
+ *
+ * These lines exist in masterdata only. The grid below is the SAP service's
+ * feed (`GET /sap/records`) joined to masterdata by `sap_reference_id`, and no
+ * service may write another's tables — so masterdata could not put them in the
+ * feed even if it wanted to. They are fetched separately and merged into the
+ * Main Table here, client-side.
+ */
+const SHORTAGE = "SHORTAGE";
+
+/**
+ * A masterdata-only back-order line in the shape the SAP grid renders.
+ * `vendorCode` is resolved by the caller: the line copies whatever its parent
+ * outward row held, and that is null for a parent masterdata only ever created
+ * lazily from a dispatch (`patch_sap_outward_by_ref` does not seed the vendor),
+ * so the vendor is looked up from the parent's own feed record instead.
+ */
+const backorderRow = (o: SapOutward, vendorCode: string | null): SapInwardRecord => ({
+  id: o.id,
+  sap_reference_id: o.sap_reference_id,
+  transaction_date: o.transaction_date,
+  dc_no: o.dc_no,
+  po_no: o.po_no,
+  material_no: o.material_no,
+  model_no: o.model_no,
+  material_description: null,
+  vendor_code: vendorCode,
+  vendor_name: null,
+  batch_no: o.batch_no,
+  lot_no: o.lot_no,
+  // the lot qty of a back-order IS the shortage it was raised for
+  quantity: o.quantity == null ? null : String(o.quantity),
+  movement_type: o.movement_type,
+  remark: null,
+  source_system: o.source_system,
+  sync_id: null,
+  created_at: o.created_at,
+  updated_at: o.updated_at,
+});
+
+/**
+ * What the red flag in the S.No cell says. The figures are derived, never
+ * stored twice: the back-order's own lot qty is the shortage, and the parent
+ * line carries the lot and the accepted qty it was worked out from.
+ */
+function shortageLabel(line: SapOutward, parent: SapOutward | undefined): string {
+  const shortage = fmtNum(line.quantity);
+  const from = line.parent_sap_reference_id ?? "the received line";
+  const lot = parent?.quantity == null ? null : fmtNum(parent.quantity);
+  const accepted = parent?.received_qty == null ? null : fmtNum(parent.received_qty);
+  const detail = lot && accepted ? ` (lot ${lot}, accepted ${accepted})` : "";
+  return `Shortage ${shortage} from ${from}${detail} · new line ${line.sap_reference_id}`;
+}
+
+/**
+ * The SAP identifiers a new outward line is created from. The SAP feed lives in
+ * another service, so a reference can reach this screen before masterdata has a
+ * line for it; sending these alongside the Box UID lets the service create one.
+ * They are ignored when the line already exists.
+ */
+const outwardSeedFrom = (row: SapInwardRecord) => ({
+  transaction_date: row.transaction_date,
+  sap_document_no: row.dc_no ?? null,
+  dc_no: row.dc_no ?? null,
+  po_no: row.po_no ?? null,
+  material_no: row.material_no ?? null,
+  model_no: row.model_no ?? null,
+  batch_no: row.batch_no ?? null,
+  lot_no: row.lot_no ?? null,
+  quantity: row.quantity ?? null,
+  movement_type: row.movement_type ?? null,
+});
+
+/**
+ * Instant tooltip — the native `title` waits ~1s and is lost when the 5s
+ * refetch re-renders the row. Opens to the right so the table's overflow
+ * container never clips it. Used by the grid's chips and by the shortage flag.
+ */
+function Tip({
+  text,
+  tipId,
+  children,
+}: {
+  text: string;
+  tipId: string;
+  children: ReactNode;
+}) {
+  return (
+    <span tabIndex={0} className="ds-focus-ring group relative inline-flex rounded-full outline-none">
+      {children}
+      <span
+        id={tipId}
+        role="tooltip"
+        className="pointer-events-none absolute left-full top-1/2 z-10 ml-1.5 hidden -translate-y-1/2 whitespace-nowrap rounded-[var(--radius-sm)] bg-[var(--color-text)] px-2 py-1 text-[11px] font-medium text-[var(--color-surface)] shadow-[var(--shadow-md)] group-hover:block group-focus-visible:block"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
+/** Red warning marker beside the serial of a shortage back-order row. */
+function ShortageFlag({ label }: { label: string }) {
+  const tipId = useId();
+  return (
+    <Tip text={label} tipId={tipId}>
+      <TriangleAlert
+        role="img"
+        aria-label={label}
+        aria-describedby={tipId}
+        className="size-3 shrink-0"
+        style={{ color: "var(--color-danger)" }}
+      />
+    </Tip>
+  );
+}
 
 /** Rounded categorical pill used across the SAP Outward grid. */
 function Chip({
@@ -93,20 +238,10 @@ function Chip({
     </span>
   );
   if (!title) return chip;
-  // Instant tooltip instead of the native `title` (which waits ~1s and is lost
-  // when the 5s refetch re-renders the row). Opens to the right so the table's
-  // overflow container never clips it.
   return (
-    <span tabIndex={0} className="ds-focus-ring group relative inline-flex rounded-full outline-none">
+    <Tip text={title} tipId={tipId}>
       {chip}
-      <span
-        id={tipId}
-        role="tooltip"
-        className="pointer-events-none absolute left-full top-1/2 z-10 ml-1.5 hidden -translate-y-1/2 whitespace-nowrap rounded-[var(--radius-sm)] bg-[var(--color-text)] px-2 py-1 text-[11px] font-medium text-[var(--color-surface)] shadow-[var(--shadow-md)] group-hover:block group-focus-visible:block"
-      >
-        {title}
-      </span>
-    </span>
+    </Tip>
   );
 }
 
@@ -284,19 +419,120 @@ export function SapUploadView() {
 
   const records = useSapRecords(params);
   // The box / tray / status of each transaction lives in the Masterdata service's
-  // sap_outwards table, keyed by sap_reference_id.
-  const outwards = useMdList<SapOutward>("sap-outwards", { page_size: 200 });
+  // sap_outwards table, keyed by sap_reference_id. Fetch exactly the lines
+  // behind the SAP records on this page — a blind first-200 window would
+  // silently drop the outward line of every row past it.
+  const pageRefs = useMemo(
+    () => (records.data?.items ?? []).map((r) => r.sap_reference_id).join(","),
+    [records.data],
+  );
+  const outwards = useMdList<SapOutward>(
+    "sap-outwards",
+    pageRefs ? { refs: pageRefs, page_size: 200 } : { page_size: 200 },
+  );
+
+  // References dispatched in this session — the row leaves the Main Table at
+  // once, before the Status service has been re-read. Declared here because
+  // the back-order list below is filtered by it too.
+  const [justDispatched, setJustDispatched] = useState<ReadonlySet<string>>(new Set());
+
+  // Shortage back-orders (masterdata only — see SHORTAGE above). Searching is
+  // server-side there too, over the same DC / PO / model / batch columns.
+  const backorders = useMdList<SapOutward>("sap-outwards", {
+    page: 1,
+    page_size: 200,
+    origin: SHORTAGE,
+    status: "active",
+    ...(search ? { search } : {}),
+  });
+  const backorderLines = useMemo(
+    () => backorders.data?.items ?? [],
+    [backorders.data],
+  );
+  /**
+   * A back-order sits on exactly the tab a feed line in the same state would:
+   * the Main Table until a Box UID dispatches it, the Complete Table after.
+   * `justDispatched` covers the moment between the scan and the Status service
+   * being re-read.
+   */
+  const [pendingBackorders, dispatchedBackorders] = useMemo(() => {
+    const open: SapOutward[] = [];
+    const done: SapOutward[] = [];
+    for (const o of backorderLines) {
+      (isDispatched(o) || justDispatched.has(o.sap_reference_id) ? done : open).push(o);
+    }
+    return [open, done] as const;
+  }, [backorderLines, justDispatched]);
+  const tabBackorders = tab === "open" ? pendingBackorders : dispatchedBackorders;
+  // The lines the shortages were taken from — for the flag's tooltip, which
+  // quotes the lot and the accepted qty the figure was derived from.
+  const parentRefs = useMemo(
+    () =>
+      [
+        ...new Set(
+          backorderLines.map((o) => o.parent_sap_reference_id).filter((r): r is string => !!r),
+        ),
+      ].join(","),
+    [backorderLines],
+  );
+  const backorderParents = useMdList<SapOutward>(
+    "sap-outwards",
+    parentRefs ? { refs: parentRefs, page_size: 200 } : { page_size: 200 },
+  );
+
   const outwardByRef = useMemo(() => {
     const m = new Map<string, SapOutward>();
     for (const o of outwards.data?.items ?? []) m.set(o.sap_reference_id, o);
+    // The back-orders are not in the SAP feed, so nothing fetched them above —
+    // but every outward cell (Box UID, Outward Status, …) reads this map.
+    for (const o of backorderLines) m.set(o.sap_reference_id, o);
     return m;
-  }, [outwards.data]);
+  }, [outwards.data, backorderLines]);
+  /** Back-order rows by the row id the grid renders them under. */
+  const backorderByRowId = useMemo(() => {
+    const m = new Map<string, SapOutward>();
+    for (const o of backorderLines) m.set(o.id, o);
+    return m;
+  }, [backorderLines]);
+  const parentByRef = useMemo(() => {
+    const m = new Map<string, SapOutward>();
+    for (const o of backorderParents.data?.items ?? []) m.set(o.sap_reference_id, o);
+    return m;
+  }, [backorderParents.data]);
+  // The parents' feed rows, for the Vendor column: the SAP feed always carries
+  // a vendor code, while the masterdata outward row may not (see backorderRow).
+  const parentFeed = useSapRecords(
+    { refs: parentRefs, page_size: 200 },
+    { enabled: parentRefs.length > 0 },
+  );
+  const parentFeedVendorByRef = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of parentFeed.data?.items ?? []) {
+      if (r.vendor_code) m.set(r.sap_reference_id, r.vendor_code);
+    }
+    return m;
+  }, [parentFeed.data]);
+  /**
+   * Vendor for a back-order: its own code, else the parent outward row's, else
+   * the parent's feed record — the first of the three that actually has one.
+   */
+  const backorderVendorCode = useCallback(
+    (o: SapOutward): string | null => {
+      if (o.vendor_code) return o.vendor_code;
+      const ref = o.parent_sap_reference_id;
+      if (!ref) return null;
+      return parentByRef.get(ref)?.vendor_code ?? parentFeedVendorByRef.get(ref) ?? null;
+    },
+    [parentByRef, parentFeedVendorByRef],
+  );
 
   // Vendor column is shown from the Vendor master, not the raw SAP feed — a code
   // that isn't a registered vendor renders as "— (not in master)".
   // Box UID master — a transaction can only be dispatched against a Box UID that
   // exists here and is still "active" (i.e. an available box).
-  const boxesList = useMdList<Box>("boxes", { page_size: 200 });
+  // `page` is sent so the service returns a real total: the client-side Box UID
+  // pre-check may only reject a value when this page holds every box there is.
+  const boxesList = useMdList<Box>("boxes", { page: 1, page_size: 200 });
   const availableBoxUids = useMemo(() => {
     const s = new Set<string>();
     for (const b of boxesList.data?.items ?? []) {
@@ -304,6 +540,10 @@ export function SapUploadView() {
     }
     return s;
   }, [boxesList.data]);
+  // The pre-check may only reject a UID when we are holding the whole master —
+  // with more boxes than one page, an unknown value goes to the service.
+  const boxesComplete =
+    !!boxesList.data && boxesList.data.items.length >= (boxesList.data.total ?? 0);
 
   // SAP movement-type lookup (masterdata) — code → description, shown on hover
   // of the "SAP" cell. Edited from /masterdata-admin, not hardcoded.
@@ -336,18 +576,67 @@ export function SapUploadView() {
     return vendorLabel(code ? vendorName.get(code) : null, code);
   };
 
-  const rows = useMemo(() => records.data?.items ?? [], [records.data]);
+  const feedRows = useMemo(() => {
+    const all = records.data?.items ?? [];
+    if (tab !== "open") return all;
+    // Only what this session has just dispatched: the server split reads the
+    // Status service, which has not been re-read yet. A line the Status service
+    // has never heard of is left visible on purpose — dropping it here would
+    // hide it from both tabs (masterdata's `seed` backfills those).
+    return all.filter((r) => !justDispatched.has(r.sap_reference_id));
+  }, [records.data, tab, justDispatched]);
+  const hidden = (records.data?.items?.length ?? 0) - feedRows.length;
+  // Back-orders live in masterdata, not the feed, so they are fetched once and
+  // carried on the first page. The totals below count them once, on whichever
+  // tab they belong to.
+  const backorderCount = tabBackorders.length;
+  const pinned = useMemo(
+    () => (page === 1 ? tabBackorders.map((o) => backorderRow(o, backorderVendorCode(o))) : []),
+    [page, tabBackorders, backorderVendorCode],
+  );
+  // Back-orders take their place among the feed rows by date rather than
+  // sitting on top of them, sorted on the same key the SAP service pages by
+  // (`transaction_date DESC, sap_reference_id DESC` — repository.py:83-85), so
+  // page 1 reads continuously into page 2.
+  //
+  // Only correct *within* page 1: the feed is paged server-side while the
+  // back-orders are all fetched here, so one older than the last feed row of
+  // page 1 still shows on page 1 instead of on its true page. Acceptable for
+  // the MVP; the clean fix is to merge them into the feed query server-side.
+  const rows = useMemo(() => {
+    const time = (r: SapInwardRecord) => {
+      const t = Date.parse(r.transaction_date);
+      return Number.isNaN(t) ? 0 : t;
+    };
+    return [...pinned, ...feedRows].sort((a, b) => {
+      const byDate = time(b) - time(a);
+      if (byDate !== 0) return byDate;
+      // Plain code-unit compare, like the server's, not localeCompare.
+      const ar = a.sap_reference_id;
+      const br = b.sap_reference_id;
+      return ar === br ? 0 : ar < br ? 1 : -1;
+    });
+  }, [pinned, feedRows]);
   const docRow = docView ? (rows.find((r) => r.id === docView.id) ?? null) : null;
-  const total = records.data?.total ?? 0;
+  /** The back-order behind the open document sheet, if it is one. */
+  const docBackorder = docView ? (backorderByRowId.get(docView.id) ?? null) : null;
+  const total = Math.max(0, (records.data?.total ?? 0) - hidden) + backorderCount;
+  const otherTotal = otherCount.data?.total;
   const tabTotals: Record<OutwardTab, number | undefined> = {
-    [tab]: records.data?.total,
-    [otherTab]: otherCount.data?.total,
+    [tab]: total,
+    // Rows dropped from the Main Table have already moved to the other tab.
+    [otherTab]:
+      otherTotal == null
+        ? undefined
+        : otherTotal +
+          hidden +
+          (otherTab === "open" ? pendingBackorders.length : dispatchedBackorders.length),
   } as Record<OutwardTab, number | undefined>;
   // Each line's status per stage comes from the Status service.
   const lineStatus = useLineStatuses(rows.map((r) => r.sap_reference_id));
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  async function patch(id: string, patchBody: { remark?: string }) {
+  async function patch(id: string, patchBody: RecordUpdate) {
     try {
       await updateRecord.mutateAsync({ id, patch: patchBody });
     } catch {
@@ -372,7 +661,112 @@ export function SapUploadView() {
     }
   }
 
-  const serialByFirstPage = (page - 1) * PAGE_SIZE;
+  /**
+   * Inline "this Box UID is no good" message per line, shown in the cell itself
+   * — a toast alone is missed by an operator whose eyes are on the scanner.
+   */
+  const [boxError, setBoxError] = useState<Record<string, string>>({});
+  const clearBoxError = useCallback((ref: string) => {
+    setBoxError((prev) => {
+      if (!(ref in prev)) return prev;
+      const next = { ...prev };
+      delete next[ref];
+      return next;
+    });
+  }, []);
+
+  /**
+   * Inline "this lot qty is no good" message per line. Same reasoning as the
+   * Box UID message: the operator is looking at the cell, not at a toast.
+   */
+  const [qtyError, setQtyError] = useState<Record<string, string>>({});
+  const clearQtyError = useCallback((id: string) => {
+    setQtyError((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
+
+  /**
+   * Save an edited Lot Qty. The lot is split down the middle into front and
+   * back cases downstream (Receiving), so only a whole, even qty is accepted —
+   * an odd one would yield half a case. The service enforces the same rule.
+   */
+  async function saveQuantity(
+    row: SapInwardRecord,
+    value: string | number | null,
+  ): Promise<boolean> {
+    const id = row.id;
+    clearQtyError(id);
+    if (value == null || value === "") {
+      setQtyError((prev) => ({ ...prev, [id]: "Enter a lot qty" }));
+      return false;
+    }
+    const n = Number(value);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+      setQtyError((prev) => ({ ...prev, [id]: "Lot qty must be a whole number above 0" }));
+      return false;
+    }
+    if (n % 2 !== 0) {
+      setQtyError((prev) => ({
+        ...prev,
+        [id]: "Lot qty must be even — it splits equally into front and back cases",
+      }));
+      return false;
+    }
+    try {
+      await updateRecord.mutateAsync({ id, patch: { quantity: n } });
+    } catch (err) {
+      setQtyError((prev) => ({
+        ...prev,
+        [id]: err instanceof ApiError ? err.displayMessage : "Update failed",
+      }));
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Save a scanned / typed Box UID. Validation belongs to the service
+   * (`_validate_master_refs`, active boxes only) — the Boxes master we hold is
+   * only a fast path, and only trusted when we have the whole of it.
+   */
+  async function saveBoxUid(row: SapInwardRecord, value: string | number | null) {
+    const ref = row.sap_reference_id;
+    const uid = value == null ? "" : String(value).trim().toUpperCase();
+    clearBoxError(ref);
+    if (!uid) {
+      setBoxError((prev) => ({ ...prev, [ref]: "Scan or type a Box UID" }));
+      return false;
+    }
+    if (boxesComplete && !availableBoxUids.has(uid)) {
+      setBoxError((prev) => ({ ...prev, [ref]: "Invalid Box UID" }));
+      return false;
+    }
+    try {
+      await patchOutwardByRef(ref, { box_uid: uid, ...outwardSeedFrom(row) });
+    } catch (err) {
+      setBoxError((prev) => ({ ...prev, [ref]: boxSaveMessage(err) }));
+      return false;
+    }
+    // Dispatched: leave the Main Table now, then refresh every list the move
+    // touches (the SAP feed's split, the outward lines, the Status service).
+    setJustDispatched((prev) => new Set(prev).add(ref));
+    toast("success", `Dispatched · ${uid}`);
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ["sap", "records"] }),
+      qc.invalidateQueries({ queryKey: ["masterdata", "sap-outwards"] }),
+      qc.invalidateQueries({ queryKey: ["status"] }),
+    ]);
+    return true;
+  }
+
+  // Page 1 carries the back-orders among a full page of feed rows, so every
+  // later page starts that many serials further along. Where they sit within
+  // the page does not change the count, only the order.
+  const serialByFirstPage = (page - 1) * PAGE_SIZE + (page > 1 ? backorderCount : 0);
   const serialOf = useMemo(() => {
     const m = new Map<string, number>();
     rows.forEach((r, i) => m.set(r.id, serialByFirstPage + i + 1));
@@ -386,7 +780,25 @@ export function SapUploadView() {
         header: "S.No",
         align: "right" as const,
         sortable: false,
-        render: (row: SapInwardRecord) => serialOf.get(row.id) ?? "—",
+        render: (row: SapInwardRecord) => {
+          const serial = serialOf.get(row.id) ?? "—";
+          const line = backorderByRowId.get(row.id);
+          if (!line) return serial;
+          // A shortage back-order is flagged where the eye lands first.
+          return (
+            <span className="inline-flex items-center justify-end gap-1">
+              {serial}
+              <ShortageFlag
+                label={shortageLabel(
+                  line,
+                  line.parent_sap_reference_id
+                    ? parentByRef.get(line.parent_sap_reference_id)
+                    : undefined,
+                )}
+              />
+            </span>
+          );
+        },
       },
       ...COLUMN_DEFS.map((c) => ({
         key: c.key,
@@ -409,6 +821,9 @@ export function SapUploadView() {
             );
           }
           if (c.editable) {
+            // A back-order has no record in the SAP feed, so there is nothing
+            // to write a remark to.
+            if (backorderByRowId.has(row.id)) return <span className="text-text-muted">—</span>;
             return <RemarkCell row={row} onSave={(v) => patch(row.id, { remark: v })} />;
           }
           if (c.key === "vendor_name") {
@@ -422,17 +837,64 @@ export function SapUploadView() {
               <span className="text-text-muted">—</span>
             );
           }
+          if (c.key === "quantity") {
+            const out = outwardByRef.get(row.sap_reference_id);
+            const qty = row.quantity == null || row.quantity === "" ? null : Number(row.quantity);
+            // Once the line is dispatched the lot has left — the qty is frozen,
+            // exactly like its Box UID.
+            if (isDispatched(out)) {
+              return (
+                <Chip
+                  tone="success"
+                  title="Locked — this line is dispatched"
+                  icon={<Lock className="size-3" />}
+                >
+                  {fmtNum(qty)}
+                </Chip>
+              );
+            }
+            // A back-order's lot qty IS the shortage it was raised for — the
+            // service worked it out, so it is shown, not edited.
+            if (backorderByRowId.has(row.id)) {
+              return <Chip tone="warning">{fmtNum(qty)}</Chip>;
+            }
+            return (
+              <OutwardCell
+                field="lot_qty"
+                kind="number"
+                value={qty}
+                display={{ kind: "num", tone: 4 }}
+                error={qtyError[row.id] ?? null}
+                onDraftChange={() => clearQtyError(row.id)}
+                onSave={(v) => saveQuantity(row, v)}
+              />
+            );
+          }
+
           const v = cell(row, c.key);
           if (v == null || v === "") return <span className="text-text-muted">—</span>;
 
           if (c.key === "dc_no" || c.key === "po_no") {
             const kind: OutwardDocKind = c.key === "dc_no" ? "dc" : "po";
+            // A back-order's own qty IS the shortage, so on its own it says
+            // nothing — the card gets the whole trail it was worked out from.
+            const backorder = backorderByRowId.get(row.id);
             return (
               <OutwardDocumentHover
                 kind={kind}
                 line={row}
                 boxUid={outwardByRef.get(row.sap_reference_id)?.box_uid ?? null}
                 vendorLabel={documentVendor(row)}
+                shortage={
+                  backorder
+                    ? shortageTrail(
+                        backorder,
+                        backorder.parent_sap_reference_id
+                          ? parentByRef.get(backorder.parent_sap_reference_id)
+                          : undefined,
+                      )
+                    : undefined
+                }
                 onView={() => setDocView({ kind, id: row.id })}
                 trigger={
                   <span className="ds-cell-id">
@@ -471,6 +933,39 @@ export function SapUploadView() {
           (outwardByRef.get(row.sap_reference_id)?.[c.key] ?? null) as string | number | null,
         render: (row: SapInwardRecord) => {
           const out = outwardByRef.get(row.sap_reference_id);
+
+          // Box UID: the one cell that must be scannable on every Main-Table
+          // row, including one masterdata has no outward line for yet — saving
+          // creates it. Once the line is dispatched the UID is frozen.
+          if (c.key === "box_uid") {
+            if (isDispatched(out)) {
+              return (
+                <Chip
+                  tone="success"
+                  title="Locked — this line is dispatched"
+                  icon={<Lock className="size-3" />}
+                >
+                  <Highlight text={out!.box_uid as string} query={search} />
+                </Chip>
+              );
+            }
+            return (
+              <OutwardCell
+                field="box_uid"
+                kind="text"
+                value={out?.box_uid ?? null}
+                display={{ kind: "chip", tone: "warning" }}
+                placeholderTone="orange"
+                highlight={search}
+                selectOnFocus
+                uppercase
+                error={boxError[row.sap_reference_id] ?? null}
+                onDraftChange={() => clearBoxError(row.sap_reference_id)}
+                onSave={(v) => saveBoxUid(row, v)}
+              />
+            );
+          }
+
           if (!out) return <span className="text-text-muted">—</span>;
 
           // Status is derived from the Box UID (set by the service) — read-only.
@@ -480,47 +975,11 @@ export function SapUploadView() {
             const st = lineStatus.statusOf(row.sap_reference_id, "outward");
             if (st) return <Chip tone={CHIP_TONE[st.tone]}>{st.label}</Chip>;
             // Status service not answered yet — fall back to the line's own column.
-            const code =
-              out.outward_status ??
-              (out.box_uid && availableBoxUids.has(out.box_uid) ? DISPATCHED : "NEW");
+            const code = out.outward_status ?? (out.box_uid ? DISPATCHED : "NEW");
             const def = statusDef.get(code);
-            const dispatched =
-              def?.dispatched ??
-              (code === DISPATCHED ||
-                (!!out.box_uid && availableBoxUids.has(out.box_uid)));
+            const dispatched = def?.dispatched ?? isDispatched(out);
             const label = def?.label ?? (dispatched ? "Dispatched" : "Yet to Dispatch");
             return <Chip tone={dispatched ? "success" : "warning"}>{label}</Chip>;
-          }
-
-          // Box UID: once the line is dispatched the UID is frozen (read-only).
-          if (c.key === "box_uid") {
-            const dispatched =
-              out.outward_status === DISPATCHED ||
-              (!!out.box_uid && availableBoxUids.has(out.box_uid));
-            if (dispatched && out.box_uid) {
-              return (
-                <Chip
-                  tone="success"
-                  title="Locked — this line is dispatched"
-                  icon={<Lock className="size-3" />}
-                >
-                  <Highlight text={out.box_uid} query={search} />
-                </Chip>
-              );
-            }
-            return (
-              <OutwardCell
-                field="box_uid"
-                kind="text"
-                value={out.box_uid}
-                display={{ kind: "chip", tone: "warning" }}
-                placeholderTone="orange"
-                highlight={search}
-                selectOnFocus
-                uppercase
-                onSave={(v) => patchOutward(out.sap_reference_id, { box_uid: v })}
-              />
-            );
           }
 
           const NUM_HUE: Record<string, number> = {
@@ -592,11 +1051,16 @@ export function SapUploadView() {
       serialOf,
       outwardByRef,
       vendorName,
+      boxError,
+      qtyError,
+      boxesComplete,
       availableBoxUids,
       statusDef,
       movementInfo,
       search,
       lineStatus.statusOf,
+      backorderByRowId,
+      parentByRef,
     ],
   );
 
@@ -616,42 +1080,15 @@ export function SapUploadView() {
         stickyHeader={false}
         compact
         toolbar={
-          <div
-            role="tablist"
-            aria-label="Outward lines"
-            className="inline-flex rounded-[var(--radius-md)] border border-border bg-surface-2 p-0.5"
-          >
-            {(
-              [
-                ["open", "Main Table"],
-                ["completed", "Complete Table"],
-              ] as const
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                aria-selected={tab === key}
-                onClick={() => setTab(key)}
-                className={cn(
-                  "ds-focus-ring inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] px-3 py-1 text-xs font-medium transition-colors",
-                  tab === key
-                    ? "bg-primary-light text-primary shadow-[var(--shadow-sm)]"
-                    : "text-text-secondary hover:text-text",
-                )}
-              >
-                {label}
-                <span
-                  className={cn(
-                    "rounded-full px-1.5 text-[10px] tabular-nums",
-                    tab === key ? "bg-white/60 text-primary" : "bg-surface text-text-muted",
-                  )}
-                >
-                  {tabTotals[key] ?? "—"}
-                </span>
-              </button>
-            ))}
-          </div>
+          <TableTabs<OutwardTab>
+            label="Outward lines"
+            value={tab}
+            onChange={setTab}
+            tabs={[
+              { key: "open", label: "Main Table", count: tabTotals.open },
+              { key: "completed", label: "Complete Table", count: tabTotals.completed },
+            ]}
+          />
         }
         emptyContent={
           search ? (
@@ -660,8 +1097,8 @@ export function SapUploadView() {
             </div>
           ) : tab === "completed" ? (
             <div className="px-6 py-14 text-center text-sm text-text-secondary">
-              No received lines yet — a line moves here when its Box UID is scanned on SAP
-              Inward.
+              No dispatched lines yet — a line moves here when a Box UID is scanned
+              against it on this screen.
             </div>
           ) : (
             <SapEmptyState />
@@ -680,7 +1117,26 @@ export function SapUploadView() {
       <OutwardDocumentModal
         view={
           docView && docRow
-            ? { kind: docView.kind, line: docRow, vendorLabel: documentVendor(docRow) }
+            ? {
+                kind: docView.kind,
+                line: docRow,
+                vendorLabel: documentVendor(docRow),
+                // The sheet's printed Qty is this line's own — correct for a
+                // back-order document. The note beside it, which is not part
+                // of the document, says which balance it is.
+                ...(docBackorder
+                  ? {
+                      note: shortageSheetNote(
+                        shortageTrail(
+                          docBackorder,
+                          docBackorder.parent_sap_reference_id
+                            ? parentByRef.get(docBackorder.parent_sap_reference_id)
+                            : undefined,
+                        ),
+                      ),
+                    }
+                  : {}),
+              }
             : null
         }
         onClose={closeDoc}
@@ -689,7 +1145,11 @@ export function SapUploadView() {
   );
 }
 
-function OutwardCell({
+/**
+ * One editable outward cell. Exported for its own test: the Box UID cell is the
+ * scanner's target, so its rejected state has to be provably visible.
+ */
+export function OutwardCell({
   field,
   kind,
   value,
@@ -699,6 +1159,8 @@ function OutwardCell({
   highlight,
   selectOnFocus,
   uppercase,
+  error,
+  onDraftChange,
   onSave,
 }: {
   field: string;
@@ -714,12 +1176,19 @@ function OutwardCell({
   selectOnFocus?: boolean;
   /** force the value to upper-case as it is typed (Box UID) */
   uppercase?: boolean;
+  /** rejection message shown inside the cell; the owner clears it */
+  error?: string | null;
+  /** fired on every keystroke / scan so the owner can drop a stale error */
+  onDraftChange?: () => void;
   onSave: (v: string | number | null) => void | boolean | Promise<void | boolean>;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value == null ? "" : String(value));
   const inputRef = useRef<HTMLInputElement>(null);
+  const errorId = useId();
   const committing = useRef(false);
+  /** the last value the server (or the pre-check) turned down — never re-sent */
+  const rejected = useRef<string | null>(null);
   const label = (o: string) => (optionLabel ? optionLabel(o) : o);
   const shown = value == null || value === "" ? null : label(String(value));
 
@@ -728,21 +1197,28 @@ function OutwardCell({
     const norm = draft.trim();
     const current = value == null ? "" : String(value);
     if (norm === current) {
+      onDraftChange?.(); // nothing to save — drop any message left from a rejection
       setEditing(false);
       return;
     }
+    // A rejected value stays in the box so the next scan can overwrite it, and
+    // the cell keeps the focus — so every following blur or Enter would re-send
+    // the very same value. Ask once; only a changed value asks again.
+    if (norm === rejected.current) return;
     committing.current = true;
     const res = await onSave(norm === "" ? null : kind === "number" ? Number(norm) : norm);
     committing.current = false;
     if (res === false) {
       // Rejected (duplicate / locked / not in master). Stay in edit mode and
       // reselect the whole value so the next scan replaces it in one shot.
+      rejected.current = norm;
       setEditing(true);
       requestAnimationFrame(() => {
         inputRef.current?.focus();
         inputRef.current?.select();
       });
     } else {
+      rejected.current = null;
       setEditing(false);
     }
   }
@@ -782,15 +1258,27 @@ function OutwardCell({
     );
   }
 
+  // One stable wrapper whether or not there is a message: the input must not be
+  // remounted when the error appears, or it loses the focus and the selection
+  // the next scan is meant to overwrite.
   return (
-    <input
+    <span className="-my-0.5 inline-flex flex-col gap-0.5">
+      <input
       ref={inputRef}
       autoFocus
       type={kind === "number" ? "number" : "text"}
       value={draft}
+      aria-invalid={error ? true : undefined}
+      aria-describedby={error ? errorId : undefined}
       onClick={(e) => e.stopPropagation()}
       onFocus={selectOnFocus ? (e) => e.currentTarget.select() : undefined}
-      onChange={(e) => setDraft(uppercase ? e.target.value.toUpperCase() : e.target.value)}
+      onChange={(e) => {
+        onDraftChange?.();
+        const next = uppercase ? e.target.value.toUpperCase() : e.target.value;
+        // Edited away from the rejected value — it may be tried again later.
+        if (next !== rejected.current) rejected.current = null;
+        setDraft(next);
+      }}
       onBlur={() => void commit()}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
@@ -798,14 +1286,31 @@ function OutwardCell({
           void commit();
         }
         if (e.key === "Escape") {
+          onDraftChange?.();
           setDraft(value == null ? "" : String(value));
           setEditing(false);
         }
       }}
-      className={`h-8 w-32 rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2 text-xs text-text outline-none focus:border-primary${
-        uppercase ? " uppercase" : ""
-      }`}
-    />
+      className={cn(
+        "h-8 w-32 rounded-[var(--radius-sm)] border bg-surface px-2 text-xs text-text outline-none",
+        error
+          ? "border-[var(--color-danger)] focus:border-[var(--color-danger)]"
+          : "border-border-strong focus:border-primary",
+        uppercase && "uppercase",
+      )}
+      />
+      {error ? (
+        // The value was rejected: the cell keeps it, selected and ready for the
+        // next scan, and says why right where the operator is looking.
+        <span
+          id={errorId}
+          role="alert"
+          className="max-w-[16rem] text-[10px] leading-tight text-[var(--color-danger)]"
+        >
+          {error}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
