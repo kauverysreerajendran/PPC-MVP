@@ -162,6 +162,9 @@ const outwardSeedFrom = (row: SapInwardRecord) => ({
   po_no: row.po_no ?? null,
   material_no: row.material_no ?? null,
   model_no: row.model_no ?? null,
+  // Carried across so the outward line names its own vendor: SAP Inward and
+  // the receipts read masterdata, not the feed, and have no fallback to it.
+  vendor_code: row.vendor_code ?? null,
   batch_no: row.batch_no ?? null,
   lot_no: row.lot_no ?? null,
   quantity: row.quantity ?? null,

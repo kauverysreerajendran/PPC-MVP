@@ -32,7 +32,11 @@ def _clean_number(v: Decimal | None) -> int | float | None:
 
 Status = Literal["active", "inactive"]
 LocationType = Literal["WAREHOUSE", "RACK", "ROW", "SHELF", "BIN"]
-OutwardStatus = Literal["NEW", "ALLOCATED", "PACKED", "DISPATCHED", "HOLD"]
+#: PENDING is a shortage back-order raised by SAP Inward — a new outward
+#: line for the balance that never arrived, still waiting to be dispatched.
+OutwardStatus = Literal[
+    "NEW", "ALLOCATED", "PACKED", "DISPATCHED", "HOLD", "PENDING"
+]
 
 Str1 = Annotated[str, StringConstraints(min_length=1, max_length=255, strip_whitespace=True)]
 
@@ -231,7 +235,12 @@ class SapOutwardUpdate(BaseModel):
 class SapOutwardTxnPatch(BaseModel):
     """The transaction fields editable from the SAP Upload screen. Every value
     given for vendor_code / box_uid / tray_id / tray_type must already exist in
-    the masters."""
+    the masters.
+
+    ``vendor_code`` is a SAP identifier, so it seeds a new line with the rest of
+    them (:data:`SAP_OUTWARD_SEED_FIELDS`) rather than editing an existing one —
+    the grid has never offered it as an editable column.
+    """
 
     vendor_code: str | None = Field(default=None, max_length=32)
     box_uid: str | None = Field(default=None, max_length=128)
@@ -241,6 +250,39 @@ class SapOutwardTxnPatch(BaseModel):
     front_case_trays: int | None = Field(default=None, ge=0)
     back_case_trays: int | None = Field(default=None, ge=0)
     outward_status: OutwardStatus | None = None
+
+    # --- only used when the reference has no outward line yet ---------------
+    # The SAP feed lives in another service, so the screen that edits a line
+    # supplies the identifiers the new row is created from. They are ignored
+    # when the line already exists — an existing line is never rewritten from
+    # the client's copy of the SAP record.
+    transaction_date: datetime | None = None
+    sap_document_no: str | None = Field(default=None, max_length=64)
+    dc_no: str | None = Field(default=None, max_length=64)
+    po_no: str | None = Field(default=None, max_length=64)
+    material_no: str | None = Field(default=None, max_length=64)
+    model_no: str | None = Field(default=None, max_length=64)
+    batch_no: str | None = Field(default=None, max_length=64)
+    lot_no: str | None = Field(default=None, max_length=64)
+    quantity: Decimal | None = Field(default=None, ge=0)
+    movement_type: str | None = Field(default=None, max_length=16)
+
+
+#: Fields of :class:`SapOutwardTxnPatch` that seed a newly created line rather
+#: than patching an existing one.
+SAP_OUTWARD_SEED_FIELDS = (
+    "transaction_date",
+    "sap_document_no",
+    "dc_no",
+    "po_no",
+    "material_no",
+    "model_no",
+    "vendor_code",
+    "batch_no",
+    "lot_no",
+    "quantity",
+    "movement_type",
+)
 
 
 class SapOutwardOut(ORMModel):
@@ -258,6 +300,15 @@ class SapOutwardOut(ORMModel):
     quantity: Decimal | None
     movement_type: str | None
     source_system: str
+    #: provenance — set on a shortage back-order, NULL / 'SAP' on a feed line
+    parent_sap_reference_id: str | None = None
+    origin: str | None = None
+    #: the parent's figures frozen when a shortage back-order was raised
+    #: (revision 0024) — read-only, NULL on every line that is not one
+    shortage_parent_lot_qty: Decimal | None = None
+    shortage_parent_accepted_qty: Decimal | None = None
+    shortage_parent_rejected_qty: Decimal | None = None
+    shortage_parent_received_qty: Decimal | None = None
     box_uid: str | None
     tray_id: str | None
     tray_type: str | None
@@ -282,7 +333,14 @@ class SapOutwardOut(ORMModel):
     #: (the scan list has its own endpoint)
     inward_scans: list[dict] | None = Field(default=None, exclude=True)
 
-    @field_serializer("quantity", "received_qty")
+    @field_serializer(
+        "quantity",
+        "received_qty",
+        "shortage_parent_lot_qty",
+        "shortage_parent_accepted_qty",
+        "shortage_parent_rejected_qty",
+        "shortage_parent_received_qty",
+    )
     def _ser_quantity(self, v: Decimal | None) -> int | float | None:
         return _clean_number(v)
 
@@ -469,6 +527,10 @@ class SapInwardScanResult(BaseModel):
     message: str
     scan: SapInwardScanOut | None = None
     outward: SapOutwardOut | None = None
+    #: the shortage back-order this entry raised, when it left a shortage — a
+    #: brand-new outward line for the balance (added field, never replaces one)
+    backorder: SapOutwardOut | None = None
+    backorder_sap_reference_id: str | None = None
 
 
 class SapInwardCloseIn(BaseModel):
