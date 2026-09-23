@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import status_client
 from app.config import settings
+from app.lotqty import is_even_whole, to_even_whole
 from app.models import SapSyncRun
 from app.providers import get_provider
 from app.repository import SapRepository
@@ -33,10 +35,36 @@ COLUMNS: list[ColumnDef] = [
     ColumnDef(key="vendor_name", header="Vendor"),
     ColumnDef(key="batch_no", header="Batch No"),
     ColumnDef(key="lot_no", header="Lot No"),
-    ColumnDef(key="quantity", header="Quantity", type="number"),
+    ColumnDef(key="quantity", header="Quantity", type="number", editable=True),
     ColumnDef(key="movement_type", header="SAP Movement"),
     ColumnDef(key="remark", header="Remark", editable=True),
 ]
+
+
+log = logging.getLogger("sap-integration.service")
+
+
+def _normalise_lot_qty(dtos: list) -> None:
+    """Round any ingested lot qty that is not a whole even number.
+
+    A feed row cannot be refused back to SAP the way a user's edit can, so an
+    odd or fractional qty is corrected to the nearest even whole number and the
+    correction is logged — the alternative is storing a lot that can never be
+    split into equal front and back cases. Rows that are already even are left
+    untouched and say nothing.
+    """
+    for d in dtos:
+        qty = getattr(d, "quantity", None)
+        if is_even_whole(qty):
+            continue
+        fixed = to_even_whole(qty)
+        log.warning(
+            "lot qty %s on %s is not a whole even number - stored as %s",
+            qty,
+            getattr(d, "sap_reference_id", "?"),
+            fixed,
+        )
+        d.quantity = fixed
 
 
 class SapService:
@@ -93,6 +121,9 @@ class SapService:
         if payload.remark is not None:
             row.remark = payload.remark or None
 
+        if payload.quantity is not None:
+            row.quantity = payload.quantity
+
         await self.repo.s.flush()
         return SapInwardRecordOut.model_validate(row)
 
@@ -117,6 +148,7 @@ class SapService:
         )
         try:
             dtos = await provider.fetch_inward_records(count=count)
+            _normalise_lot_qty(dtos)
             ingested = await self.repo.upsert_records(
                 dtos, source_system=settings.SAP_SOURCE_SYSTEM, sync_id=run.id
             )

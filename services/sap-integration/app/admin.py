@@ -6,6 +6,8 @@ password in ``SAP_ADMIN_PASSWORD`` (login user is ignored).
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from fastapi import FastAPI
 from sqladmin import Admin, ModelView
 from sqladmin.authentication import AuthenticationBackend
@@ -17,6 +19,19 @@ from app.models import SapInwardRecord, SapSyncRun
 
 # Distinct from the monolith's /admin so both can sit behind one gateway.
 ADMIN_BASE_URL = "/sap-admin"
+
+
+def _num(value: object) -> str:
+    """420.000 -> '420', 420.5 -> '420.5', keep everything else as text.
+
+    ``quantity`` is Numeric(18, 3), so a whole lot renders three zeros it does
+    not mean. Same rule as the masterdata admin's ``_num``.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, Decimal):
+        return str(int(value) if value == value.to_integral_value() else value.normalize())
+    return str(value)
 
 
 class _Auth(AuthenticationBackend):
@@ -52,6 +67,8 @@ class SapInwardRecordAdmin(ModelView, model=SapInwardRecord):
         SapInwardRecord.movement_type,
         SapInwardRecord.remark,
     ]
+    column_formatters = {SapInwardRecord.quantity: lambda o, _a: _num(o.quantity)}
+    column_formatters_detail = column_formatters
     column_default_sort = ("transaction_date", True)
     column_searchable_list = [
         SapInwardRecord.sap_reference_id,
