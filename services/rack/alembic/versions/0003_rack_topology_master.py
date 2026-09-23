@@ -73,6 +73,11 @@ _AISLE_A: list[tuple[str, int, str, int, int, int]] = [
     ("A6", 6, "R", 5, 3, 12),
 ]
 
+#: Both aisles are still seeded here, unchanged: this revision is applied
+#: everywhere and rewriting its data would give existing and fresh databases
+#: two different histories. The MVP keeps Aisle A only, and
+#: ``0007_aisle_a_only`` is the single point of truth for that — it relocates
+#: what aisle R holds and then removes it, on fresh databases too.
 _AISLES: list[tuple[str, str, list[tuple[str, int, str, int, int, int]]]] = [
     ("R", "R (Right)", _AISLE_R),
     ("A", "A (Left)", _AISLE_A),
