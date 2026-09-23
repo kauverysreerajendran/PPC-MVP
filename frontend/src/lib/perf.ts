@@ -10,6 +10,8 @@
  * Pure module state — no React, no storage, no network of its own.
  */
 
+import type { ServiceInfo, ServiceKey } from "./api/services";
+
 export type PerfSample = {
   path: string;
   method: string;
@@ -70,6 +72,52 @@ export function getSamples(): readonly PerfSample[] {
   return samples;
 }
 
+// ---------------------------------------------------------------------------
+// Service outages. `lib/api/client.ts` marks a service down the moment the
+// Next proxy reports its upstream unreachable (a bare, non-JSON 5xx with no
+// `Server-Timing`) and marks it up again on the next successful response.
+// `ServiceOutageBanner` shows the list; polling keeps running so recovery is
+// noticed automatically.
+
+export interface ServiceOutage {
+  service: ServiceInfo;
+  since: number;
+  /** last failing request path, for the tooltip */
+  path: string;
+}
+
+const outages = new Map<ServiceKey, ServiceOutage>();
+// Stable snapshot for useSyncExternalStore (must return the same reference
+// until something changes).
+let outageSnapshot: readonly ServiceOutage[] = [];
+
+function refreshOutages(): void {
+  outageSnapshot = [...outages.values()].sort((a, b) => a.since - b.since);
+  notify();
+}
+
+export function markServiceDown(service: ServiceInfo, path: string): void {
+  const existing = outages.get(service.key);
+  if (existing) {
+    existing.path = path;
+    return;
+  }
+  outages.set(service.key, { service, since: Date.now(), path });
+  refreshOutages();
+}
+
+export function markServiceUp(service: ServiceInfo): void {
+  if (outages.delete(service.key)) refreshOutages();
+}
+
+export function getOutages(): readonly ServiceOutage[] {
+  return outageSnapshot;
+}
+
+export function isServiceDown(key: ServiceKey): boolean {
+  return outages.has(key);
+}
+
 /** "slow" when the last three requests were all slow (docs/10 §7 spirit). */
 export function getNetworkState(): NetworkState {
   if (samples.length < 3) return "fast";
@@ -89,7 +137,7 @@ export function parseServerTiming(header: string | null): number | null {
   if (!header) return null;
   for (const part of header.split(",")) {
     const [name, ...params] = part.trim().split(";");
-    if (name.trim() !== "app") continue;
+    if (name?.trim() !== "app") continue;
     for (const p of params) {
       const [k, v] = p.trim().split("=");
       if (k === "dur") {
@@ -117,5 +165,6 @@ if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
   (window as unknown as { __ppcPerf?: unknown }).__ppcPerf = {
     samples: () => [...samples],
     state: getNetworkState,
+    outages: getOutages,
   };
 }

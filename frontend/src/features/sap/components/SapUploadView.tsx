@@ -1,11 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { Inbox, Lock, MapPin, TriangleAlert } from "lucide-react";
+import { Inbox, Lock, TriangleAlert } from "lucide-react";
 import { DataTable, type Column } from "@/components/ui/DataTable";
-import { TableTabs } from "@/components/ui/TableTabs";
 import { Pagination } from "@/components/ui/Pagination";
 import { useToast } from "@/components/ui/Toast";
 import { usePageSize } from "@/lib/usePageSize";
@@ -59,33 +57,42 @@ const CHIP_TONE: Record<StatusToneName, ChipTone> = {
 type OutwardTab = "open" | "completed";
 
 /**
- * Main Table = lines still to dispatch; Complete Table = lines dispatched
- * against a Box UID, including the ones SAP Inward has since received (the
- * outward stage moves DISPATCHED → RECEIVED, and both belong in Complete).
+ * SAP Outward is ONE table. It used to be split — Main Table for lines still to
+ * dispatch, Complete Table for the dispatched ones — by asking the Status
+ * service server-side which references held the outward stage. That split is
+ * gone: every line shows here whatever its outward status.
  *
- * The split is the outward stage held by the Status service, applied
- * server-side: `/sap/records` asks it which references are in either status.
+ * The helper stays so the query below reads the same, and so restoring the
+ * split is a change in this one place.
  */
-const DISPATCHED_CODES = "DISPATCHED,RECEIVED";
-
-const outwardSplit = (tab: OutwardTab) =>
-  ({
-    status_stage: "outward",
-    status_code: DISPATCHED_CODES,
-    status_match: tab === "completed" ? "include" : "exclude",
-  }) as const;
+const outwardSplit = () => ({}) as const;
 
 /**
  * Why a Box UID would not save. A 404 is not about the box at all: masterdata
  * has no outward line for the SAP reference and could not create one either, so
  * saying "not in master" would send the operator hunting the wrong problem.
+ *
+ * The cell is one column wide, so what it shows is a phrase, not a sentence;
+ * masterdata's full wording stays as the title for anyone who wants it.
  */
-function boxSaveMessage(err: unknown): string {
+export function boxSaveMessage(err: unknown): CellError {
   if (!(err instanceof ApiError)) return "Could not save — try again";
   if (err.status === 404) {
-    return "No outward line for this SAP reference — run the masterdata sync";
+    return {
+      text: "No outward line — run masterdata sync",
+      title: "No outward line for this SAP reference — run the masterdata sync",
+    };
   }
-  return err.displayMessage || "Invalid Box UID";
+  const full = err.displayMessage || "Invalid Box UID";
+  const duplicate = /already assigned to outward line (\S+)/.exec(full);
+  if (duplicate) return { text: `Already on ${duplicate[1]}`, title: full };
+  if (/not registered in the Boxes master/.test(full)) {
+    return { text: "Not in the Boxes master", title: full };
+  }
+  if (/Box UID is locked/.test(full)) {
+    return { text: "Dispatched — Box UID locked", title: full };
+  }
+  return full;
 }
 
 /** True once the line carries a Box UID and masterdata calls it dispatched. */
@@ -328,7 +335,11 @@ const COLUMN_DEFS: {
 /** Remark is rendered as the last column, after the outward transaction fields. */
 const REMARK_DEF = { key: "remark" as const, header: "Remark", editable: true };
 
-/** Box UID / Outward Status stay visible by default; the rest collapse behind "Show more". */
+/**
+ * Outward Status stays visible by default; the rest collapse behind "Show
+ * more". Box UID is in this list but is filtered out of the Main Table (see
+ * the column build below) — it is shown on the Complete Table only.
+ */
 const OUTWARD_PRIMARY_DEFS = [
   { key: "box_uid", header: "Box UID", type: "text" },
   { key: "outward_status", header: "Outward Status", type: "text" },
@@ -363,7 +374,9 @@ function SapEmptyState() {
 export function SapUploadView() {
   const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState(false);
-  const [tab, setTab] = useState<OutwardTab>("open");
+  // One table, so there is nothing to switch: `tab` is pinned. It still gates
+  // the Box UID column and the back-order split below, which stay in place.
+  const tab: OutwardTab = "open";
   // DC / PO sheet opened from a cell's hover card.
   const [docView, setDocView] = useState<{ kind: OutwardDocKind; id: string } | null>(null);
   const closeDoc = useCallback(() => setDocView(null), []);
@@ -371,7 +384,6 @@ export function SapUploadView() {
   const updateRecord = useUpdateSapRecord();
   const toast = useToast();
   const qc = useQueryClient();
-  const router = useRouter();
 
   // Live ("elastic") search — typed in the header bar, filters server-side.
   const query = useSearchStore((s) => s.query);
@@ -406,20 +418,10 @@ export function SapUploadView() {
       page_size: PAGE_SIZE,
       ...(search ? { search } : {}),
       ...(matchedRefs ? { refs: matchedRefs } : {}),
-      ...outwardSplit(tab),
+      ...outwardSplit(),
     }),
     [page, PAGE_SIZE, search, matchedRefs, tab],
   );
-  // Just the total of the other tab, for its badge.
-  const otherTab: OutwardTab = tab === "open" ? "completed" : "open";
-  const otherCount = useSapRecords({
-    page: 1,
-    page_size: 1,
-    ...(search ? { search } : {}),
-    ...(matchedRefs ? { refs: matchedRefs } : {}),
-    ...outwardSplit(otherTab),
-  });
-
   const records = useSapRecords(params);
   // The box / tray / status of each transaction lives in the Masterdata service's
   // sap_outwards table, keyed by sap_reference_id. Fetch exactly the lines
@@ -466,7 +468,11 @@ export function SapUploadView() {
     }
     return [open, done] as const;
   }, [backorderLines, justDispatched]);
-  const tabBackorders = tab === "open" ? pendingBackorders : dispatchedBackorders;
+  // One table, so both kinds of back-order belong in it.
+  const tabBackorders = useMemo(
+    () => [...pendingBackorders, ...dispatchedBackorders],
+    [pendingBackorders, dispatchedBackorders],
+  );
   // The lines the shortages were taken from — for the flag's tooltip, which
   // quotes the lot and the accepted qty the figure was derived from.
   const parentRefs = useMemo(
@@ -579,15 +585,9 @@ export function SapUploadView() {
     return vendorLabel(code ? vendorName.get(code) : null, code);
   };
 
-  const feedRows = useMemo(() => {
-    const all = records.data?.items ?? [];
-    if (tab !== "open") return all;
-    // Only what this session has just dispatched: the server split reads the
-    // Status service, which has not been re-read yet. A line the Status service
-    // has never heard of is left visible on purpose — dropping it here would
-    // hide it from both tabs (masterdata's `seed` backfills those).
-    return all.filter((r) => !justDispatched.has(r.sap_reference_id));
-  }, [records.data, tab, justDispatched]);
+  // With one table there is nowhere for a row to move to, so nothing is held
+  // back: a line just dispatched in this session stays exactly where it is.
+  const feedRows = useMemo(() => records.data?.items ?? [], [records.data]);
   const hidden = (records.data?.items?.length ?? 0) - feedRows.length;
   // Back-orders live in masterdata, not the feed, so they are fetched once and
   // carried on the first page. The totals below count them once, on whichever
@@ -624,17 +624,6 @@ export function SapUploadView() {
   /** The back-order behind the open document sheet, if it is one. */
   const docBackorder = docView ? (backorderByRowId.get(docView.id) ?? null) : null;
   const total = Math.max(0, (records.data?.total ?? 0) - hidden) + backorderCount;
-  const otherTotal = otherCount.data?.total;
-  const tabTotals: Record<OutwardTab, number | undefined> = {
-    [tab]: total,
-    // Rows dropped from the Main Table have already moved to the other tab.
-    [otherTab]:
-      otherTotal == null
-        ? undefined
-        : otherTotal +
-          hidden +
-          (otherTab === "open" ? pendingBackorders.length : dispatchedBackorders.length),
-  } as Record<OutwardTab, number | undefined>;
   // Each line's status per stage comes from the Status service.
   const lineStatus = useLineStatuses(rows.map((r) => r.sap_reference_id));
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -668,7 +657,7 @@ export function SapUploadView() {
    * Inline "this Box UID is no good" message per line, shown in the cell itself
    * — a toast alone is missed by an operator whose eyes are on the scanner.
    */
-  const [boxError, setBoxError] = useState<Record<string, string>>({});
+  const [boxError, setBoxError] = useState<Record<string, CellError>>({});
   const clearBoxError = useCallback((ref: string) => {
     setBoxError((prev) => {
       if (!(ref in prev)) return prev;
@@ -927,7 +916,13 @@ export function SapUploadView() {
           return String(v);
         },
       })),
-      ...[...OUTWARD_PRIMARY_DEFS, ...(expanded ? OUTWARD_EXTRA_DEFS : [])].map((c) => ({
+      ...[
+        // Box UID is shown on the Complete Table only. Every line there is
+        // already dispatched, so the cell renders the frozen chip; the Main
+        // Table, which holds the lines before dispatch, no longer carries it.
+        ...OUTWARD_PRIMARY_DEFS.filter((c) => c.key !== "box_uid" || tab === "completed"),
+        ...(expanded ? OUTWARD_EXTRA_DEFS : []),
+      ].map((c) => ({
         key: `out_${c.key}`,
         header: c.header,
         sortable: false,
@@ -937,9 +932,10 @@ export function SapUploadView() {
         render: (row: SapInwardRecord) => {
           const out = outwardByRef.get(row.sap_reference_id);
 
-          // Box UID: the one cell that must be scannable on every Main-Table
-          // row, including one masterdata has no outward line for yet — saving
-          // creates it. Once the line is dispatched the UID is frozen.
+          // Box UID: reached only from the Complete Table now, where every
+          // line is dispatched, so the frozen chip is what renders. The
+          // editable branch below is kept intact so putting the column back on
+          // the Main Table is a one-line change.
           if (c.key === "box_uid") {
             if (isDispatched(out)) {
               return (
@@ -969,21 +965,27 @@ export function SapUploadView() {
             );
           }
 
-          if (!out) return <span className="text-text-muted">—</span>;
-
-          // Status is derived from the Box UID (set by the service) — read-only.
-          // Label + dispatched flag come from the outward-status master table.
+          // Outward Status is read-only — three sources, in order of authority.
+          // It is handled before the "no outward line" guard below, because a
+          // line masterdata has never seen still has a status to show.
           if (c.key === "outward_status") {
-            // Source of truth: the Status service (Dispatched → Received).
+            //  1. the Status service, the source of truth (Received, and any
+            //     later stage it reports).
             const st = lineStatus.statusOf(row.sap_reference_id, "outward");
             if (st) return <Chip tone={CHIP_TONE[st.tone]}>{st.label}</Chip>;
-            // Status service not answered yet — fall back to the line's own column.
-            const code = out.outward_status ?? (out.box_uid ? DISPATCHED : "NEW");
+            //  2. the line's own stored status, when masterdata has a row for
+            //     it — this is what puts Pending on a shortage back-order.
+            //  3. nothing stored: the line reads Dispatched, the state a SAP
+            //     line arrives in. Display only — see the note in the header
+            //     comment: it does not mean the Status service agrees.
+            const code = out?.outward_status ?? DISPATCHED;
             const def = statusDef.get(code);
-            const dispatched = def?.dispatched ?? isDispatched(out);
+            const dispatched = def?.dispatched ?? code === DISPATCHED;
             const label = def?.label ?? (dispatched ? "Dispatched" : "Yet to Dispatch");
             return <Chip tone={dispatched ? "success" : "warning"}>{label}</Chip>;
           }
+
+          if (!out) return <span className="text-text-muted">—</span>;
 
           const NUM_HUE: Record<string, number> = {
             no_of_trays: 6,
@@ -1011,30 +1013,6 @@ export function SapUploadView() {
       ...(expanded
         ? [
             {
-              key: "__rack",
-              header: "Location",
-              sortable: false,
-              align: "left" as const,
-              render: (row: SapInwardRecord) => {
-                const q =
-                  row.lot_no || row.model_no || outwardByRef.get(row.sap_reference_id)?.lot_no;
-                if (!q) return <span className="text-text-muted">—</span>;
-                return (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      router.push(`/rack-locator?q=${encodeURIComponent(String(q))}`)
-                    }
-                    title={`Locate ${q} in the racks`}
-                    className="ds-focus-ring inline-flex items-center gap-1 rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-primary hover:text-primary"
-                  >
-                    <MapPin className="size-3" />
-                    Rack
-                  </button>
-                );
-              },
-            },
-            {
               key: REMARK_DEF.key,
               header: REMARK_DEF.header,
               sortable: true,
@@ -1050,6 +1028,7 @@ export function SapUploadView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       expanded,
+      tab,
       updateRecord.isPending,
       serialOf,
       outwardByRef,
@@ -1082,26 +1061,10 @@ export function SapUploadView() {
         columnDividers
         stickyHeader={false}
         compact
-        toolbar={
-          <TableTabs<OutwardTab>
-            label="Outward lines"
-            value={tab}
-            onChange={setTab}
-            tabs={[
-              { key: "open", label: "Main Table", count: tabTotals.open },
-              { key: "completed", label: "Complete Table", count: tabTotals.completed },
-            ]}
-          />
-        }
         emptyContent={
           search ? (
             <div className="px-6 py-14 text-center text-sm text-text-secondary">
               No records match “{search}”.
-            </div>
-          ) : tab === "completed" ? (
-            <div className="px-6 py-14 text-center text-sm text-text-secondary">
-              No dispatched lines yet — a line moves here when a Box UID is scanned
-              against it on this screen.
             </div>
           ) : (
             <SapEmptyState />
@@ -1152,6 +1115,14 @@ export function SapUploadView() {
  * One editable outward cell. Exported for its own test: the Box UID cell is the
  * scanner's target, so its rejected state has to be provably visible.
  */
+/**
+ * A rejection shown inside a table cell. A plain string is both the text and
+ * the whole story; the object form shows a short phrase and keeps the long
+ * wording — masterdata writes for an API consumer, not for an 8rem column — as
+ * the title.
+ */
+export type CellError = string | { text: string; title: string };
+
 export function OutwardCell({
   field,
   kind,
@@ -1180,7 +1151,7 @@ export function OutwardCell({
   /** force the value to upper-case as it is typed (Box UID) */
   uppercase?: boolean;
   /** rejection message shown inside the cell; the owner clears it */
-  error?: string | null;
+  error?: CellError | null;
   /** fired on every keystroke / scan so the owner can drop a stale error */
   onDraftChange?: () => void;
   onSave: (v: string | number | null) => void | boolean | Promise<void | boolean>;
@@ -1304,13 +1275,17 @@ export function OutwardCell({
       />
       {error ? (
         // The value was rejected: the cell keeps it, selected and ready for the
-        // next scan, and says why right where the operator is looking.
+        // next scan, and says why right where the operator is looking. The
+        // message wraps inside the input's own width — the table cell around it
+        // sets `whitespace-nowrap`, and one long line there would stretch the
+        // column and push the whole grid past the viewport.
         <span
           id={errorId}
           role="alert"
-          className="max-w-[16rem] text-[10px] leading-tight text-[var(--color-danger)]"
+          title={typeof error === "string" ? undefined : error.title}
+          className="w-32 whitespace-normal break-words text-[10px] leading-tight text-[var(--color-danger)]"
         >
-          {error}
+          {typeof error === "string" ? error : error.text}
         </span>
       ) : null}
     </span>

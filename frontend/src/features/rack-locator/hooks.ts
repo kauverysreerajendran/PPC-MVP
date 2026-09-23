@@ -26,6 +26,7 @@ export const rackLocatorKeys = {
   topology: (p: object) => ["rack-locator", "topology", p] as const,
   rack: (p: object) => ["rack-locator", "rack", p] as const,
   locate: (p: object) => ["rack-locator", "locate", p] as const,
+  placed: (sapReferenceId: string | null) => ["rack-locator", "placed", sapReferenceId] as const,
 };
 
 export function useTopology(params: { warehouse_code?: string; aisle_code?: string } = {}) {
@@ -115,11 +116,29 @@ export function useReleaseTray() {
 export function usePlacedPieces(sapReferenceId: string | null) {
   const interval = usePollingInterval();
   return useQuery<PlacedResult>({
-    queryKey: ["rack-locator", "placed", sapReferenceId],
+    queryKey: rackLocatorKeys.placed(sapReferenceId),
     queryFn: ({ signal }) => rackLocatorApi.placed(sapReferenceId as string, { signal }),
     enabled: !!sapReferenceId,
     ...transactionalQueryOptions(interval),
   });
+}
+
+/**
+ * Re-read the qty of one SAP line already in trays, bypassing the cache, and
+ * write it into the same entry `usePlacedPieces` reads — so the screen moves to
+ * the fresh figure too. Placement confirms run on this, never on a poll that
+ * may be seconds old.
+ */
+export function useRefreshPlacedQty() {
+  const qc = useQueryClient();
+  return async (sapReferenceId: string): Promise<number> => {
+    const fresh = await qc.fetchQuery<PlacedResult>({
+      queryKey: rackLocatorKeys.placed(sapReferenceId),
+      queryFn: ({ signal }) => rackLocatorApi.placed(sapReferenceId, { signal }),
+      staleTime: 0,
+    });
+    return Number(fresh.placed_qty ?? 0) || 0;
+  };
 }
 
 /** Store received pieces; refreshes the racks and the line's statuses. */
@@ -130,6 +149,9 @@ export function usePlaceReceived() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: rackLocatorKeys.all });
       void qc.invalidateQueries({ queryKey: ["status"] });
+      // Placing every received piece is what moves the line from SAP Inward's
+      // Main Table to its Complete Table, so that worklist is re-read too.
+      void qc.invalidateQueries({ queryKey: ["masterdata", "sap-inward"] });
     },
   });
 }

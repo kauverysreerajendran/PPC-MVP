@@ -12,11 +12,11 @@ from decimal import Decimal
 
 from .base import SapRecordDTO
 
+# The vendor master (masterdata service) is the only source of vendors; the feed
+# may not invent its own, or the Vendor column renders "not in master".
 _VENDORS = [
-    ("V1001", "Precision Polishing Works"),
-    ("V1002", "Chola Plating & Finishing"),
-    ("V1003", "Kovai Surface Tech"),
-    ("V1004", "Sri Balaji Metal Finishers"),
+    ("KALAI-INDUSTRIES", "Kalai Industries"),
+    ("SHINE-TIMES", "Shine Times"),
 ]
 # Real model numbers read off the shop-floor RACK-K chart (KL + KR faces).
 _MODELS = [
@@ -38,7 +38,10 @@ class MockSapProvider:
             rnd = random.Random(f"{today.date()}-{i}")  # noqa: S311 - not security-sensitive
             vendor_code, vendor_name = rnd.choice(_VENDORS)
             model = rnd.choice(_MODELS)
-            qty = Decimal(rnd.randrange(25, 500))
+            # Multiples of 20 only — a lot splits down the middle into front
+            # and back cases, and both halves have to be round themselves
+            # (120 -> 60 + 60), which is how the shop floor counts a lot.
+            qty = Decimal(rnd.randrange(40, 500, 20))
             out.append(
                 SapRecordDTO(
                     sap_reference_id=f"SAP-{today:%y%m%d}-{i + 1:03d}",

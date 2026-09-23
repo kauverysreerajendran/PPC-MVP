@@ -11,10 +11,16 @@ export function Providers({ children }: { children: ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
+            // lib/api/client.ts already retries idempotent requests once and
+            // fails instantly when the owning service is down, so React Query
+            // adds at most one more attempt — and never for a 4xx or for a
+            // service that is not running (retrying only delays the message;
+            // polling picks the service up again when it returns).
             retry: (failureCount, err) => {
-              if (err instanceof ApiError && err.status < 500) return false;
-              return failureCount < 2;
+              if (err instanceof ApiError && (err.status < 500 || err.status === 503)) return false;
+              return failureCount < 1;
             },
+            retryDelay: 500,
             // Reflect out-of-band DB changes (e.g. edits made in the DB admin)
             // when the network returns. Refetch-on-focus is opted into per
             // query in lib/polling.ts (docs/09 §8.1 — do not refetch what has

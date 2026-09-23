@@ -1,21 +1,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, MapPin, PackageMinus } from "lucide-react";
+import { Box, Check, MapPin, PackageMinus } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useToast } from "@/components/ui/Toast";
+import { cn } from "@/lib/cn";
 import { ApiError } from "@/lib/api/errors";
 import { useOccupyTray, useReleaseTray } from "../hooks";
-import type { SelectedLocation } from "../types";
-import { TRAY_STATE, rowPositionLabel } from "./trayStyles";
+import { useBoxUid } from "../useBoxUid";
+import type { SelectedLocation, SlotState } from "../types";
+import { OCCUPANCY_SCALE, TRAY_STATE, rowPositionLabel } from "./trayStyles";
 
-const STATE_TONE = {
-  empty: "success",
-  occupied: "neutral",
-  reserved: "warning",
-  blocked: "danger",
-} as const;
+/** One colour system: empty pulls the occupancy scale's blue, occupied is
+ * neutral grey (it isn't part of the free->full scale), reserved and blocked
+ * borrow the scale tones nearest their meaning. */
+const SLOT_BADGE: Record<SlotState, { bg: string; text: string }> = {
+  empty: { bg: OCCUPANCY_SCALE.empty.bg, text: OCCUPANCY_SCALE.empty.text },
+  occupied: { bg: "bg-surface-2", text: "text-text-secondary" },
+  reserved: { bg: OCCUPANCY_SCALE.filling.bg, text: OCCUPANCY_SCALE.filling.text },
+  blocked: { bg: OCCUPANCY_SCALE.full.bg, text: OCCUPANCY_SCALE.full.text },
+};
 
 /**
  * What the user has pointed at, spelled out one level at a time, plus the one
@@ -34,6 +38,9 @@ export function LocationSummary({
   const toast = useToast();
   const occupy = useOccupyTray();
   const release = useReleaseTray();
+  const { boxUid, isLoading: boxLoading } = useBoxUid(
+    selected?.state === "occupied" ? selected.sap_reference_id : null,
+  );
 
   // a new tray is a new decision — never carry the previous entry across
   useEffect(() => setModelNo(""), [selected?.code]);
@@ -95,11 +102,35 @@ export function LocationSummary({
           <MapPin className="size-3.5 text-primary" />
           Selected Location
         </h2>
-        <StatusBadge
-          label={TRAY_STATE[selected.state].label.replace(" Tray", "")}
-          tone={STATE_TONE[selected.state]}
-        />
+        <span
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium",
+            SLOT_BADGE[selected.state].bg,
+            SLOT_BADGE[selected.state].text,
+          )}
+        >
+          <span className="size-1.5 rounded-full bg-current opacity-70" aria-hidden />
+          {TRAY_STATE[selected.state].label.replace(" Tray", "")}
+        </span>
       </div>
+
+      {selected.state === "occupied" ? (
+        // the box is what the operator is holding and looking for — lead with it
+        <div className="mb-3 rounded-[var(--radius-md)] border border-[color-mix(in_srgb,var(--color-primary)_30%,transparent)] bg-surface-2 px-3 py-2.5">
+          <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-text-muted">
+            <Box className="size-3 text-primary" />
+            Box UID
+          </div>
+          <div
+            className={cn(
+              "mt-0.5 break-all font-mono text-lg font-semibold leading-tight",
+              boxUid ? "text-text" : "text-text-muted",
+            )}
+          >
+            {boxUid ?? (boxLoading ? "Loading…" : "—")}
+          </div>
+        </div>
+      ) : null}
 
       <dl className="space-y-1.5 rounded-[var(--radius-md)] bg-teal-50 p-3 text-sm dark:bg-[#12333a]">
         {rows.map(([label, value]) => (
@@ -142,7 +173,11 @@ export function LocationSummary({
               size="sm"
               fullWidth
               loading={occupy.isPending}
-              disabled={!modelNo.trim() || !selected.id}
+              disabled={
+                !modelNo.trim() ||
+                !selected.id ||
+                !(selected.state === "empty" || selected.state === "reserved")
+              }
               onClick={confirm}
             >
               <Check className="size-3.5" />

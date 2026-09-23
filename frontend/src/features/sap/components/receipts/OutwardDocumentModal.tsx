@@ -10,6 +10,12 @@ export interface OutwardDocumentView {
   kind: OutwardDocKind;
   line: OutwardDocumentLine;
   vendorLabel: string;
+  /**
+   * A line of context about the sheet that is *not* part of the document —
+   * used for a shortage back-order, whose printed Qty is the balance still
+   * owed, to say which lot that balance came off. Shown under the sheet.
+   */
+  note?: string | undefined;
 }
 
 /** The full outward document sheet (Titan challan or purchase order) in a modal. */
@@ -21,7 +27,7 @@ export function OutwardDocumentModal({
   onClose: () => void;
 }) {
   if (!view) return null;
-  const { kind, line, vendorLabel } = view;
+  const { kind, line, vendorLabel, note } = view;
   const no = kind === "dc" ? `DC ${line.dc_no ?? "—"}` : `PO ${line.po_no ?? "—"}`;
   return (
     <Modal
@@ -41,6 +47,11 @@ export function OutwardDocumentModal({
       ) : (
         <PurchaseOrderPreview line={line} vendorLabel={vendorLabel} />
       )}
+      {note ? (
+        <p className="mt-3 rounded-[var(--radius-sm)] border border-border bg-surface-2 px-3 py-2 text-xs text-text-secondary">
+          {note}
+        </p>
+      ) : null}
     </Modal>
   );
 }

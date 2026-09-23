@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { EmptyState } from "./EmptyState";
@@ -38,6 +38,7 @@ export function DataTable<T>({
   columnDividers = false,
   emptyContent,
   compact = false,
+  groupLabel,
 }: {
   columns: Column<T>[];
   rows: T[];
@@ -61,6 +62,11 @@ export function DataTable<T>({
   emptyContent?: ReactNode;
   /** dense grid: 12px body text and tighter row padding. */
   compact?: boolean;
+  /**
+   * A full-width heading row rendered above `row` when this returns a node —
+   * for visually grouping consecutive rows. Return null for no heading.
+   */
+  groupLabel?: ((row: T, index: number) => ReactNode) | undefined;
 }) {
   const [sort, setSort] = useState<SortState>(initialSort);
 
@@ -177,30 +183,45 @@ export function DataTable<T>({
                   </td>
                 </tr>
               ) : null}
-              {sortedRows.map((row) => (
-                <tr
-                  key={rowKey(row)}
-                  onClick={onRowClick ? () => onRowClick(row) : undefined}
-                  className={cn(
-                    "border-b border-border last:border-0 transition-colors hover:bg-surface-2",
-                    onRowClick && "cursor-pointer",
-                  )}
-                >
-                  {columns.map((c, ci) => (
-                    <td
-                      key={c.key}
+              {sortedRows.map((row, ri) => {
+                const heading = groupLabel?.(row, ri);
+                return (
+                  <Fragment key={rowKey(row)}>
+                    {heading ? (
+                      <tr className="border-b border-border bg-surface-2">
+                        <th
+                          scope="colgroup"
+                          colSpan={columns.length}
+                          className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-text-secondary"
+                        >
+                          {heading}
+                        </th>
+                      </tr>
+                    ) : null}
+                    <tr
+                      onClick={onRowClick ? () => onRowClick(row) : undefined}
                       className={cn(
-                        "whitespace-nowrap text-text",
-                        compact ? "px-2 py-1.5" : headerVariant === "solid" ? "px-2 py-2" : "px-3 py-2.5",
-                        align(c.align),
-                        columnDividers && ci > 0 && "border-l border-border",
+                        "border-b border-border last:border-0 transition-colors hover:bg-surface-2",
+                        onRowClick && "cursor-pointer",
                       )}
                     >
-                      {c.render ? c.render(row) : String(c.accessor?.(row) ?? "—")}
-                    </td>
-                  ))}
-                </tr>
-              ))}
+                      {columns.map((c, ci) => (
+                        <td
+                          key={c.key}
+                          className={cn(
+                            "whitespace-nowrap text-text",
+                            compact ? "px-2 py-1.5" : headerVariant === "solid" ? "px-2 py-2" : "px-3 py-2.5",
+                            align(c.align),
+                            columnDividers && ci > 0 && "border-l border-border",
+                          )}
+                        >
+                          {c.render ? c.render(row) : String(c.accessor?.(row) ?? "—")}
+                        </td>
+                      ))}
+                    </tr>
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

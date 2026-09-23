@@ -61,6 +61,31 @@
   --color-danger-bg: #fdecec;
   --color-info: var(--color-teal-600);
   --color-info-bg: var(--color-teal-50);
+  /* Rack-occupancy scale, tier 0 — "empty" reads distinctly from `--color-primary`
+     (also teal) so an empty tile never looks like a selected/active one. */
+  --color-empty: #2f6fdb;
+  --color-empty-bg: #e6f0ff;
+
+  /* Rack drawings (components/rack) — the steel the racks are made of, so the
+     inline SVG follows the theme instead of carrying its own greys. */
+  --color-rack-upright: #64748b;
+  --color-rack-beam: #94a3b8;
+  --color-rack-lamp: #f0b357;
+
+  /* Rack illustration (components/rack/RackIllustration.tsx) — gunmetal frame
+     and the stock blue bins an empty rack shows; other states tint the bins
+     from the occupancy scale above. */
+  --rack-steel-front: #3a4452;
+  --rack-steel-back: #2a323d;
+  --rack-beam: #6b7686;
+  --rack-beam-top: #9aa4b2;
+  --rack-lid: #d5dae1;
+  --rack-bin-body: #2f7de1;
+  --rack-bin-lip: #5fa2f0;
+  --rack-bin-shade: #1f5fb8;
+  --rack-bin-label: #a9cbf5;
+  --rack-card-border: #e6ecf2;
+  --rack-hatch: #e9edf2;
 
   /* Radius */
   --radius-xs: 3px;
@@ -111,6 +136,13 @@
     --color-primary-hover: var(--color-teal-300);
     --color-primary-light: #12333a;
     --color-primary-fg: #042226;
+    --color-empty: #7aa2f7;
+    --color-empty-bg: #16233f;
+    --color-rack-upright: #3d525c;
+    --color-rack-beam: #55707c;
+    --color-rack-lamp: #d9a05b;
+    --rack-card-border: var(--color-border);
+    --rack-hatch: #1c2a31;
     --color-sidebar-from: #13232b;
     --color-sidebar-to: #0f1b21;
     --color-sidebar-border: rgb(126 220 226 / 0.14);
@@ -135,6 +167,13 @@
   --color-primary-hover: var(--color-teal-300);
   --color-primary-light: #12333a;
   --color-primary-fg: #042226;
+  --color-empty: #7aa2f7;
+  --color-empty-bg: #16233f;
+  --color-rack-upright: #3d525c;
+  --color-rack-beam: #55707c;
+  --color-rack-lamp: #d9a05b;
+  --rack-card-border: var(--color-border);
+  --rack-hatch: #1c2a31;
   --color-sidebar-from: #13232b;
   --color-sidebar-to: #0f1b21;
   --color-sidebar-border: rgb(126 220 226 / 0.14);
@@ -372,22 +411,14 @@ main::-webkit-scrollbar-thumb,
 }
 
 /* --------------------------------------------------------------------------
- * Sign-in page (app/(auth)/login/page.tsx). The process artwork (7.png) fills
+ * Sign-in page (app/(auth)/login/page.tsx). The process artwork (4.png) fills
  * the viewport edge to edge as a full-bleed backdrop; the sign-in card floats
  * on top, right-aligned on desktop so it clears the poster's own focal point,
  * centred below lg where there is no room to spare either side.
  *
- * The scanner is its own layer: `login-scanner.webp` laid back over
- * `login-plate.webp` (7.png with it removed and the gap filled) at the box
- * page.tsx measures, so it can lift and settle while the shelving, the label
- * and the panel stay put. The laser flickers, the nose LED pulses in step, and
- * a read line sweeps the label — the beam and the LED ride with the scanner,
- * the read line stays on the barcode.
- *
- * All three effects are placed as percentages of `.login-scene`, which is the
- * box `object-cover` would give the photo, worked out explicitly from the
- * viewport — a percentage of the viewport would drift off the label as the
- * window changed shape, because cover crops.
+ * `.login-scene` is the box `object-cover` would give the photo, worked out
+ * explicitly from the viewport so the picture is anchored the same way at any
+ * window shape rather than left to cropping.
  * ------------------------------------------------------------------------ */
 .login-page {
   position: relative;
@@ -397,199 +428,228 @@ main::-webkit-scrollbar-thumb,
 }
 
 .login-scene {
-  /* 7.png is 3840x2160. Cover, anchored to the top edge like `object-top`. */
-  --scene-w: max(100vw, calc(100dvh * 16 / 9));
+  /* Cover, anchored to the top edge like `object-top`. --scene-ar is the
+     backdrop's own aspect ratio, handed down by page.tsx with its pixel
+     measurements so the ratio is never written twice.
+
+     The artwork is a wide banner — wider than any window — so covering the
+     viewport always crops it somewhere. It is held flush left rather than
+     centred, which keeps the poster's branding and headline in frame and spends
+     the crop on the right end, where the card sits anyway.
+
+     --scene-x slides the picture sideways from there: negative moves it LEFT
+     (showing more of the banner's right end), positive moves it RIGHT. 0 is
+     flush left, which is also as far right as it can go and still reach the
+     opposite edge — so anything above 0 would open a gap on the left. */
+  --scene-x: -4vw;
+  --scene-w: max(100vw, calc(100dvh * var(--scene-ar)));
   position: absolute;
-  left: 50%;
+  left: 0;
   top: 0;
   z-index: 0;
   width: var(--scene-w);
-  height: calc(var(--scene-w) * 9 / 16);
-  transform: translateX(-50%);
+  height: calc(var(--scene-w) / var(--scene-ar));
+  transform: translateX(var(--scene-x));
   pointer-events: none;
 }
 
-/* One read cycle: the beam settles, the line sweeps the label, then a pause. */
-.login-scene {
-  --scan-cycle: 3.2s;
-  --scan-teal: #63e6f2;
-  /* How far the hand lifts, as a share of the picture's height. Small on
-     purpose: what the layer uncovers is a fill, not a real photograph of what
-     is behind the hand, and the further it travels the more of it shows. */
-  --scan-lift: calc(var(--scene-w) * 9 / 16 * 0.006);
-  --scan-lift-cycle: 6.4s;
+/* ---- the moving operator ----------------------------------------------
+   Every layer is positioned in percentages of `.login-scene`, handed down by
+   page.tsx (--l/--t/--w/--h), so it stays welded to the artwork at any size.
+   The arm layer pivots about its right edge — the elbow, off screen — which
+   swings the scanner nose a couple of centimetres across the label, the way a
+   hand settles a scanner onto a barcode. The beam is a child of the layer so it
+   follows; its far end sweeps the label as the arm moves. */
+.login-arm,
+.login-swoosh {
+  position: absolute;
+  left: var(--l);
+  top: var(--t);
+  width: var(--w);
+  height: var(--h);
+}
+.login-arm {
+  z-index: 2;
+  transform-origin: 100% 82%;
+  animation: login-arm-scan 5.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  will-change: transform;
+}
+.login-swoosh {
+  z-index: 3;
+}
+/* Ease in, hold on the barcode, ease back: a scan, not a metronome. */
+@keyframes login-arm-scan {
+  0%   { transform: rotate(0.85deg) translate(0.35%, 0.2%); }
+  38%  { transform: rotate(-1.05deg) translate(-0.55%, 0.55%); }
+  52%  { transform: rotate(-0.95deg) translate(-0.5%, 0.5%); }
+  100% { transform: rotate(0.85deg) translate(0.35%, 0.2%); }
 }
 
-/* What belongs to the scanner and therefore moves with it: the cut-out and the
-   nose LED. The ray itself does not — it is painted into the plate and stays
-   welded to it. The rig spans the whole scene and only it is transformed, so
-   its children keep the plain picture percentages they were measured at. */
-.login-scan-rig {
-  position: absolute;
-  inset: 0;
-}
-.login-scan-cut {
-  position: absolute;
-  left: var(--s-l);
-  top: var(--s-t);
-  width: var(--s-w);
-  height: var(--s-h);
-}
+/* The read light. Real scanner light is volumetric: a bright bloom at the
+   emitter, a soft cone that fades with distance, a crisp aimer line down its
+   axis, and a pool where it lands. Everything sits in `screen` blend so it adds
+   light to the photo instead of painting over it, and the intensity follows
+   the arm's own cycle (`login-light-cycle`, same 5.2 s and easing as
+   `login-arm-scan`): dim while the scanner approaches, full while it holds on
+   the barcode, dim as it lifts — with a fast LED flicker on top.
 
-/* The laser, anchored on the label and rotated back to the scanner's nose, so
-   the geometry comes from the two measured points rather than a guessed angle. */
-.login-scan-beam {
+   The `.login-beam` box is anchored at the nose and rotated to aim at the
+   label: `--len` is the nose-to-label distance and the cone runs past it so
+   the light lands on the label rather than stopping short. The pivot is the
+   box's top-left; `translateY(-50%)` runs first (transform functions apply
+   right to left) and centres the box's left edge on the nose, then the
+   rotation swings it round. */
+.login-beam {
   position: absolute;
-  left: var(--s-l);
-  top: var(--s-t);
-  width: var(--s-w);
-  /* Matched to the painted ray's core, which is about 50px across at the
-     picture's full size — a hairline read as a second, thinner ray beside it. */
-  height: 0.75%;
-  margin-top: -0.375%;
-  transform: rotate(var(--s-deg));
-  transform-origin: 0 50%;
-  border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    rgb(99 230 242 / 0.55) 0%,
-    var(--scan-teal) 35%,
-    rgb(160 245 255 / 0.9) 100%
-  );
-  filter: blur(0.12vw);
-  box-shadow: 0 0 22px 6px rgb(99 230 242 / 0.4);
+  left: var(--l);
+  top: var(--t);
+  width: calc(var(--len) * 1.3);
+  height: 34%;
+  transform-origin: 0 0;
+  transform: rotate(var(--deg)) translateY(-50%);
   mix-blend-mode: screen;
-  opacity: 0.9;
+  animation: login-light-cycle 5.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  pointer-events: none;
 }
-
-/* The nose LED, brightening as each read starts. */
-.login-scan-led {
+/* The cone: clipped on the inner box, blurred on the outer, so the edge is
+   soft (a filter applies before clip-path on the same element, which would
+   leave a hard edge). */
+.login-beam-cone {
   position: absolute;
-  left: var(--s-l);
-  top: var(--s-t);
-  width: 1.8%;
+  inset: -8%;
+  filter: blur(5px);
+  animation: login-led-flicker 0.9s steps(1, end) infinite;
+}
+.login-beam-cone::before {
+  content: "";
+  position: absolute;
+  inset: 8%;
+  /* A narrow fan that has faded out by the time it reaches the label, so the
+     label itself stays readable — the pool and read line carry the "hit". */
+  clip-path: polygon(0 47%, 100% 18%, 100% 82%, 0 53%);
+  background:
+    radial-gradient(ellipse 45% 70% at 0% 50%, rgb(255 255 255 / 0.9), rgb(200 248 255 / 0) 100%),
+    linear-gradient(
+      90deg,
+      rgb(225 252 255 / 0.85) 0%,
+      rgb(160 236 250 / 0.5) 30%,
+      rgb(120 224 246 / 0.22) 60%,
+      rgb(120 224 246 / 0.05) 82%,
+      rgb(120 224 246 / 0) 92%
+    );
+}
+/* The aimer: a thin, hot line down the axis with its own halo. */
+.login-beam-core {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 90%;
+  height: 2px;
+  transform: translateY(-50%);
+  background: linear-gradient(90deg, #ffffff 0%, rgb(225 255 255 / 0.95) 45%, rgb(190 245 255 / 0) 100%);
+  box-shadow:
+    0 0 6px 2px rgb(190 248 255 / 0.9),
+    0 0 22px 6px rgb(130 228 250 / 0.55);
+}
+/* Bloom at the emitter — the brightest point in the picture. */
+.login-led {
+  position: absolute;
+  left: var(--l);
+  top: var(--t);
+  width: 9%;
   aspect-ratio: 1;
-  translate: -50% -50%;
+  transform: translate(-50%, -50%);
   border-radius: 50%;
-  background: radial-gradient(circle, rgb(255 255 255 / 0.9) 0%, var(--scan-teal) 35%, rgb(99 230 242 / 0) 70%);
+  background:
+    radial-gradient(circle, #ffffff 0%, rgb(235 255 255 / 0.95) 12%, rgb(160 238 252 / 0.6) 30%, rgb(110 220 246 / 0.2) 52%, rgb(110 220 246 / 0) 70%);
   mix-blend-mode: screen;
-  opacity: 0.55;
+  animation:
+    login-light-cycle 5.2s cubic-bezier(0.45, 0, 0.55, 1) infinite,
+    login-led-breathe 1.8s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes login-light-cycle {
+  0%   { opacity: 0.45; }
+  28%  { opacity: 0.7; }
+  38%  { opacity: 1; }
+  52%  { opacity: 1; }
+  64%  { opacity: 0.7; }
+  100% { opacity: 0.45; }
+}
+@keyframes login-led-flicker {
+  0%   { opacity: 1; }
+  17%  { opacity: 0.86; }
+  31%  { opacity: 1; }
+  54%  { opacity: 0.9; }
+  73%  { opacity: 1; }
+  88%  { opacity: 0.84; }
+}
+@keyframes login-led-breathe {
+  0%, 100% { scale: 0.92; }
+  50%      { scale: 1.1; }
 }
 
-/* The read line, clipped to the label. The label sits in perspective, so the
-   box is rotated to its measured angle and the line simply travels down it. */
-.login-scan-sweep {
+/* Where the light lands: a pool that brightens with the beam, and a read line
+   running across the bars. */
+.login-hit {
   position: absolute;
-  left: var(--s-l);
-  top: var(--s-t);
-  width: var(--s-w);
-  height: var(--s-h);
-  overflow: hidden;
-  transform: translate(-50%, -50%) rotate(var(--s-deg));
+  left: var(--l);
+  top: var(--t);
+  width: calc(var(--w) * 2.2);
+  height: calc(var(--h) * 1.9);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  /* A wide, faint pool around the label rather than a fog on top of it: the
+     centre stays light enough that the bars and code read crisp, and the
+     `screen` blend only lifts the tray, not the white paper. */
+  background: radial-gradient(closest-side, rgb(200 245 255 / 0.28), rgb(150 235 250 / 0.14) 55%, rgb(120 225 245 / 0) 100%);
+  mix-blend-mode: screen;
+  filter: blur(6px);
+  animation: login-light-cycle 5.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  pointer-events: none;
 }
-/* Deliberately NOT `screen`: the label is white, and screen cannot brighten
-   white, so the line would be invisible exactly where it has to read. A tinted
-   overlay darkens the paper as it passes, which is what a read looks like. */
-.login-scan-line {
+.login-label {
   position: absolute;
-  left: -8%;
-  right: -8%;
+  left: var(--l);
+  top: var(--t);
+  width: var(--w);
+  height: var(--h);
+  transform: translate(-50%, -50%) rotate(var(--deg));
+  /* No overflow clipping: a clipped halo shows the box's edges as a faint
+     rectangle over the label. The line's travel is bounded by its keyframes. */
+  mix-blend-mode: screen;
+  animation: login-light-cycle 5.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  pointer-events: none;
+}
+.login-label-line {
+  position: absolute;
   top: 0;
-  height: 22%;
-  background: linear-gradient(
-    to bottom,
-    rgb(12 120 134 / 0),
-    rgb(22 170 186 / 0.45) 38%,
-    rgb(120 245 255 / 0.95) 50%,
-    rgb(22 170 186 / 0.45) 62%,
-    rgb(12 120 134 / 0)
-  );
-  box-shadow: 0 0 18px 4px rgb(99 230 242 / 0.45);
-  opacity: 0;
+  left: -10%;
+  width: 120%;
+  height: 3.5%;
+  background: linear-gradient(90deg, rgb(255 255 255 / 0), #ffffff 25%, #ffffff 75%, rgb(255 255 255 / 0));
+  box-shadow:
+    0 0 5px 1px rgb(200 250 255 / 0.85),
+    0 0 12px 3px rgb(140 232 250 / 0.45);
+  animation: login-label-read 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite alternate;
+}
+@keyframes login-label-read {
+  from { transform: translateY(0); }
+  to   { transform: translateY(2750%); }
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .login-scan-beam {
-    animation: login-scan-flicker var(--scan-cycle) steps(1, end) infinite;
+@media (prefers-reduced-motion: reduce) {
+  .login-arm,
+  .login-beam,
+  .login-beam-cone,
+  .login-led,
+  .login-hit,
+  .login-label,
+  .login-label-line {
+    animation: none;
   }
-  .login-scan-led {
-    animation: login-scan-led var(--scan-cycle) ease-in-out infinite;
-  }
-  .login-scan-line {
-    animation: login-scan-sweep var(--scan-cycle) ease-in-out infinite;
-    will-change: transform;
-  }
-  .login-scan-rig {
-    animation: login-scan-lift var(--scan-lift-cycle) ease-in-out infinite;
-    will-change: transform;
-  }
-}
-
-/* A real laser is not steady while it reads: short, uneven steps, then a hold. */
-@keyframes login-scan-flicker {
-  0%,
-  10%,
-  20%,
-  30% {
-    opacity: 0.72;
-  }
-  5%,
-  15%,
-  25%,
-  35%,
-  100% {
-    opacity: 1;
-  }
-  40%,
-  70% {
-    opacity: 0.85;
-  }
-}
-@keyframes login-scan-led {
-  0%,
-  100% {
-    opacity: 0.45;
-    scale: 0.82;
-  }
-  18% {
-    opacity: 1;
-    scale: 1.08;
-  }
-  45% {
-    opacity: 0.6;
-    scale: 0.95;
-  }
-}
-/* The hand lifts, holds, settles a touch low, and comes back. */
-@keyframes login-scan-lift {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  32% {
-    transform: translateY(calc(-1 * var(--scan-lift)));
-  }
-  68% {
-    transform: translateY(calc(var(--scan-lift) * 0.45));
-  }
-}
-
-/* Down the label, and done — the rest of the cycle is the pause between reads. */
-@keyframes login-scan-sweep {
-  0% {
-    transform: translateY(-14%);
-    opacity: 0;
-  }
-  8% {
-    opacity: 1;
-  }
-  38% {
-    opacity: 1;
-  }
-  45%,
-  100% {
-    transform: translateY(100%);
-    opacity: 0;
+  .login-label-line {
+    transform: translateY(1300%);
   }
 }
 
@@ -609,11 +669,15 @@ main::-webkit-scrollbar-thumb,
   position: relative;
   overflow: hidden;
   width: 100%;
-  max-width: 19rem;
+  max-width: 24rem;
   border-radius: 1.5rem;
-  background: linear-gradient(165deg, #f3fbfb 0%, #e3f5f5 100%);
+  /* Part-transparent at the top so the photo reads through the card's head and
+     it sits in the scene rather than on it; opaque by the fields, which have to
+     stay legible over whatever the picture is doing behind them. */
+  background: linear-gradient(165deg, rgb(255 255 255 / 0.27) 0%, #e3f5f5 100%);
+  backdrop-filter: blur(10px);
   box-shadow: 0 24px 48px -18px rgb(2 33 41 / 0.45);
-  padding: 1.75rem 1.5rem 1.625rem;
+  padding: 2rem 1.875rem 1.875rem;
 }
 .login-card-fold {
   position: absolute;
@@ -633,6 +697,33 @@ main::-webkit-scrollbar-thumb,
   }
 }
 
+/* Suggested tray (rack placement) — a slow, soft pulse that says "this one",
+   never a strobe. The rank badge on the bar carries the same message, so the
+   motion is an aid and not the only signal. */
+@keyframes ds-tray-blink {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-primary) 55%, transparent);
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 22%, transparent);
+  }
+}
+.ds-tray-suggested {
+  animation: ds-tray-blink 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* no pulse: a static dashed ring marks the suggestion instead */
+  .ds-tray-suggested {
+    animation: none;
+    outline: 1px dashed var(--color-primary);
+    outline-offset: 1px;
+  }
+}
+
 .ds-animate-fade {
   animation: ds-fade-in 0.2s var(--ease-out) both;
 }
@@ -641,6 +732,14 @@ main::-webkit-scrollbar-thumb,
 }
 .ds-animate-scale {
   animation: ds-scale-in 0.18s var(--ease-out) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ds-animate-fade,
+  .ds-animate-fade-up,
+  .ds-animate-scale,
+  .ds-skeleton::after {
+    animation: none;
+  }
 }
 
 .ds-skeleton {
@@ -1205,5 +1304,50 @@ main::-webkit-scrollbar-thumb,
   100% {
     transform: translateX(2rem);
     opacity: 0;
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * Rack drawings (components/rack/RackElevation) — the hover and focus affordances
+ * for a tray slot. These live here rather than in Tailwind classes because the
+ * target is an SVG <g>: the lift is a transform on the group, and the ring is
+ * painted by the <rect> inside it, so the two need a parent/child rule.
+ * -------------------------------------------------------------------------- */
+.rack-slot {
+  cursor: pointer;
+  transition: transform 140ms ease, filter 140ms ease;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.rack-slot[aria-disabled="true"] {
+  cursor: default;
+}
+
+/* the lift: a hair upward, the same gesture the rack cards use on hover */
+.rack-slot:not([aria-disabled="true"]):hover {
+  transform: translateY(-1.5px);
+  filter: brightness(1.04);
+}
+
+.rack-slot:not([aria-disabled="true"]):hover .rack-slot__box {
+  stroke-width: 2;
+}
+
+.rack-slot:focus {
+  outline: none;
+}
+
+.rack-slot:focus-visible .rack-slot__box {
+  stroke: var(--color-primary);
+  stroke-width: 2.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rack-slot {
+    transition: none;
+  }
+  .rack-slot:not([aria-disabled="true"]):hover {
+    transform: none;
   }
 }

@@ -1,101 +1,92 @@
 "use client";
 
-import { cn } from "@/lib/cn";
 import type { AisleSummary, RackSummary } from "../types";
 import { RackCard } from "./RackCard";
-import { num, pct } from "./trayStyles";
+import type { OccupancyTone } from "./trayStyles";
 
 /**
- * The aisle drawn as a floor plan rather than a list: racks sit in their real
- * left-to-right order along a walkable lane, split onto the side of the aisle
- * each one actually faces.
+ * One aisle as a floor plan: a titled grid of racks for each side of the aisle
+ * ("AISLE A (LEFT)", "AISLE A (RIGHT)"), with the hatched walkway drawn between
+ * them. Racks keep their real left-to-right order within a side.
  *
- * Racks whose master records no side all fall into the first bank, so an aisle
- * that was never sided still reads correctly.
+ * Racks whose master records no side all fall into one untitled-side group, so
+ * an aisle that was never sided still reads correctly.
  */
 export function AisleMap({
   aisle,
   activeRackCode,
+  dimmedTone,
   onOpen,
 }: {
   aisle: AisleSummary;
   activeRackCode?: string | undefined;
+  /** legend/segment filter from the parent overview — racks not in this state are dimmed */
+  dimmedTone?: OccupancyTone | null | undefined;
   onOpen: (rack: RackSummary) => void;
 }) {
-  const ordered = [...aisle.racks].sort((a, b) => a.position - b.position);
-  const sides = [...new Set(ordered.map((r) => r.side ?? ""))];
-  const near = ordered.filter((r) => (r.side ?? "") === sides[0]);
-  const far = ordered.filter((r) => (r.side ?? "") !== sides[0]);
+  const sides = groupBySide(aisle.racks);
+  const aisleName = aisle.aisle_name ?? aisle.aisle_code;
 
   return (
     <section
-      className="rounded-[var(--radius-lg)] border border-border bg-surface shadow-[var(--shadow-sm)]"
-      aria-label={`Aisle ${aisle.aisle_code}`}
+      className="rounded-[var(--radius-lg)] border border-border bg-surface p-3 shadow-[var(--shadow-sm)]"
+      aria-label={`Aisle ${aisleName}`}
     >
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <div>
-          <h3 className="text-sm font-semibold">
-            Aisle {aisle.aisle_name ?? aisle.aisle_code}
+      {sides.map((group, i) => (
+        <div key={group.side}>
+          {i > 0 ? <AisleDivider label={`Aisle ${aisle.aisle_code}`} /> : null}
+          <h3 className="mb-2 px-0.5 text-[15px] font-bold uppercase tracking-[0.5px] text-text">
+            Aisle {aisle.aisle_code}
+            {group.label ? ` (${group.label})` : ""}
           </h3>
-          <p className="mt-0.5 text-xs text-text-secondary tabular-nums">
-            {aisle.rack_count} racks · {num(aisle.occupancy.capacity)} trays ·{" "}
-            {num(aisle.occupancy.empty)} empty
-          </p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {group.racks.map((rack) => (
+              <RackCard
+                key={rack.id}
+                rack={rack}
+                active={rack.rack_code === activeRackCode}
+                dimmed={!!dimmedTone && rack.state !== dimmedTone}
+                onOpen={onOpen}
+              />
+            ))}
+          </div>
         </div>
-        <span className="text-xs font-medium tabular-nums text-text-secondary">
-          {pct(aisle.occupancy.availability_pct)} available
-        </span>
-      </header>
-
-      <div className="overflow-x-auto p-4">
-        <div className="min-w-max space-y-2">
-          <Bank racks={near} activeRackCode={activeRackCode} onOpen={onOpen} />
-          <Lane label={`Aisle ${aisle.aisle_code}`} />
-          {far.length > 0 ? (
-            <Bank racks={far} activeRackCode={activeRackCode} onOpen={onOpen} />
-          ) : null}
-        </div>
-      </div>
+      ))}
+      {/* a single-sided aisle still shows its walkway */}
+      {sides.length === 1 ? <AisleDivider label={`Aisle ${aisle.aisle_code}`} /> : null}
     </section>
   );
 }
 
-function Bank({
-  racks,
-  activeRackCode,
-  onOpen,
-}: {
-  racks: RackSummary[];
-  activeRackCode?: string | undefined;
-  onOpen: (rack: RackSummary) => void;
-}) {
-  if (racks.length === 0) return null;
-  return (
-    <div className="flex gap-2">
-      {racks.map((rack) => (
-        <div key={rack.id} className="w-[168px] shrink-0">
-          <RackCard
-            rack={rack}
-            active={rack.rack_code === activeRackCode}
-            onOpen={onOpen}
-          />
-        </div>
-      ))}
-    </div>
+const SIDE_LABEL: Record<string, string> = { L: "Left", R: "Right" };
+
+/** Racks grouped by the side of the aisle they face, left before right. */
+function groupBySide(racks: RackSummary[]) {
+  const ordered = [...racks].sort((a, b) => a.position - b.position);
+  const keys = [...new Set(ordered.map((r) => (r.side ?? "").trim().toUpperCase()))].sort(
+    (a, b) => sideRank(a) - sideRank(b) || a.localeCompare(b),
   );
+  return keys.map((side) => ({
+    side,
+    label: SIDE_LABEL[side] ?? side,
+    racks: ordered.filter((r) => (r.side ?? "").trim().toUpperCase() === side),
+  }));
 }
 
-/** The walkway between the two banks of racks. */
-function Lane({ label }: { label: string }) {
+function sideRank(side: string) {
+  if (side.startsWith("L")) return 0;
+  if (side.startsWith("R")) return 1;
+  return 2;
+}
+
+/** The walkway between the two banks of racks: a faint 45° hatch, label on the right. */
+function AisleDivider({ label }: { label: string }) {
   return (
     <div
-      className={cn(
-        "flex h-7 items-center justify-center rounded-[var(--radius-sm)]",
-        "bg-[repeating-linear-gradient(45deg,transparent,transparent_6px,var(--color-surface-2)_6px,var(--color-surface-2)_12px)]",
-        "border-y border-dashed border-border",
-      )}
+      className="my-3 flex h-[18px] items-center justify-end rounded-[3px] bg-[repeating-linear-gradient(45deg,var(--rack-hatch)_0_1.5px,transparent_1.5px_7px)]"
+      aria-hidden
     >
-      <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
+      <span className="mr-4 bg-surface px-2 text-[10px] font-semibold uppercase leading-[18px] tracking-[3px] text-text-muted">
         {label}
       </span>
     </div>

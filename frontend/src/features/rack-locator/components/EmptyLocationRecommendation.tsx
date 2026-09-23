@@ -16,7 +16,10 @@ export function EmptyLocationRecommendation({
   onSelect,
   onMore,
   loading,
+  bare = false,
 }: {
+  /** just the ranked list, no card or heading — for a disclosure elsewhere */
+  bare?: boolean;
   result: LocateResult | null;
   selectedCode?: string | undefined;
   onSelect: (rec: Recommendation) => void;
@@ -24,8 +27,13 @@ export function EmptyLocationRecommendation({
   loading?: boolean;
 }) {
   return (
-    <div className="rounded-[var(--radius-lg)] border border-border bg-surface p-4 shadow-[var(--shadow-sm)]">
-      <div className="mb-3 flex items-center justify-between gap-2">
+    <div
+      className={cn(
+        !bare &&
+          "rounded-[var(--radius-lg)] border border-border bg-surface p-4 shadow-[var(--shadow-sm)]",
+      )}
+    >
+      <div className={cn("mb-3 flex items-center justify-between gap-2", bare && "hidden")}>
         <h2 className="flex items-center gap-1.5 text-sm font-semibold text-text">
           <MapPin className="size-3.5 text-primary" />
           Nearest Empty Locations
@@ -41,8 +49,8 @@ export function EmptyLocationRecommendation({
         <p className="py-6 text-center text-xs text-text-secondary">Searching the aisle…</p>
       ) : !result ? (
         <p className="py-6 text-center text-xs text-text-secondary">
-          Run <span className="font-medium text-text">Locate Me</span> to rank the free
-          trays nearest to you.
+          Run <span className="font-medium text-text">Locate Me</span> to rank the free trays
+          nearest to you.
         </p>
       ) : result.recommendations.length === 0 ? (
         <p className="py-6 text-center text-xs text-text-secondary">
@@ -59,9 +67,7 @@ export function EmptyLocationRecommendation({
                 title={rec.reason}
                 className={cn(
                   "ds-focus-ring flex w-full items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm transition-colors",
-                  rec.code === selectedCode
-                    ? "bg-teal-50 dark:bg-[#12333a]"
-                    : "hover:bg-surface-2",
+                  rec.code === selectedCode ? "bg-teal-50 dark:bg-[#12333a]" : "hover:bg-surface-2",
                 )}
               >
                 <span className="flex min-w-0 items-center gap-1.5 text-text-secondary">
@@ -80,7 +86,9 @@ export function EmptyLocationRecommendation({
         </ul>
       )}
 
-      {onMore && result && result.recommendations.length > 0 &&
+      {onMore &&
+      result &&
+      result.recommendations.length > 0 &&
       result.total_empty > result.recommendations.length ? (
         <button
           type="button"

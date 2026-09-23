@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ArrowRight, Lock, PackageCheck, TriangleAlert, X } from "lucide-react";
+import { ArrowRight, Lock, PackageCheck, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { Modal } from "@/components/ui/Modal";
 import { cn } from "@/lib/cn";
 import type { SapOutward } from "@/features/masterdata/types";
 import { OutwardDocumentModal } from "@/features/sap/components/receipts/OutwardDocumentModal";
@@ -43,6 +44,11 @@ export function ReceivingPanel({ line, vendorName, pending, serverError, onRecor
   const [doc, setDoc] = useState<OutwardDocKind>("dc");
   const [viewing, setViewing] = useState(false);
   const closeView = useCallback(() => setViewing(false), []);
+  // The nested document modal listens for Escape too; while it is open the
+  // receiving window must stay put so the typed quantities survive.
+  const closeReceiving = useCallback(() => {
+    if (!viewing) onCancel();
+  }, [viewing, onCancel]);
   const vendor = vendorLabel(vendorName, line.vendor_code);
   const lot = line.quantity == null ? null : Number(line.quantity);
 
@@ -56,80 +62,78 @@ export function ReceivingPanel({ line, vendorName, pending, serverError, onRecor
   ];
 
   return (
-    <section
-      aria-label={`Receiving box ${line.box_uid ?? ""}`}
-      className="mb-3 rounded-[var(--radius-lg)] border border-[color-mix(in_srgb,var(--color-primary)_35%,var(--color-border))] bg-surface p-4 shadow-[var(--shadow-sm)]"
+    <Modal
+      open
+      // While the full document sheet is open, Escape / backdrop belong to it.
+      onClose={closeReceiving}
+      size="xl"
+      title={`Receiving — ${line.box_uid ?? ""}`}
+      description={`PO ${line.po_no ?? "—"} · DC ${line.dc_no ?? "—"}`}
     >
-      <header className="mb-3 flex flex-wrap items-center gap-2">
-        <h2 className="flex items-center gap-1.5 text-sm font-semibold text-text">
-          <PackageCheck className="size-4 text-primary" />
-          Receiving
-        </h2>
-        <span className="ds-chip ds-chip-0 font-mono" title="Scanned Box UID">
-          <Lock className="size-3" />
-          <span>{line.box_uid}</span>
-        </span>
-        <button
-          type="button"
-          onClick={onCancel}
-          disabled={pending}
-          aria-label="Close receiving"
-          className="ds-focus-ring ml-auto rounded p-1 text-text-muted hover:bg-surface-2 hover:text-text disabled:opacity-55"
-        >
-          <X className="size-4" />
-        </button>
-      </header>
+      {/* Bounded so the whole form stays reachable on a laptop screen. */}
+      <div className="max-h-[70vh] overflow-y-auto">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-text">
+            <PackageCheck className="size-4 text-primary" />
+            Receiving
+          </span>
+          <span className="ds-chip ds-chip-0 font-mono" title="Scanned Box UID">
+            <Lock className="size-3" />
+            <span>{line.box_uid}</span>
+          </span>
+        </div>
 
-      <dl className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
-        {facts.map(([k, v]) => (
-          <div key={k} className="min-w-0 rounded-[var(--radius-sm)] border border-border bg-surface-2 px-2 py-1.5">
-            <dt className="text-[10px] text-text-secondary">{k}</dt>
-            <dd className="break-words text-xs font-medium text-text">{v}</dd>
-          </div>
-        ))}
-      </dl>
-
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
-        {lot == null ? (
-          <p role="alert" className="text-xs text-[var(--color-danger)]">
-            This line has no lot qty, so the accepted qty cannot be checked.
-          </p>
-        ) : (
-          <QuantityForm lot={lot} pending={pending} serverError={serverError} onRecord={onRecord} />
-        )}
-
-        <div className="min-w-0">
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            <div role="tablist" aria-label="Outward documents" className="flex flex-wrap gap-1">
-              {DOC_TABS.map((t) => (
-                <button
-                  key={t.kind}
-                  type="button"
-                  role="tab"
-                  aria-selected={doc === t.kind}
-                  onClick={() => setDoc(t.kind)}
-                  className={cn(
-                    "ds-focus-ring inline-flex items-center gap-1 rounded-[var(--radius-sm)] border px-2 py-1 text-xs font-medium transition-colors",
-                    doc === t.kind
-                      ? "border-primary bg-[var(--color-primary-light)] text-primary"
-                      : "border-border-strong text-text-secondary hover:border-primary",
-                  )}
-                >
-                  {OUTWARD_DOCUMENT_TITLE[t.kind]} ({t.tag})
-                </button>
-              ))}
+        <dl className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+          {facts.map(([k, v]) => (
+            <div key={k} className="min-w-0 rounded-[var(--radius-sm)] border border-border bg-surface-2 px-2 py-1.5">
+              <dt className="text-[10px] text-text-secondary">{k}</dt>
+              <dd className="break-words text-xs font-medium text-text">{v}</dd>
             </div>
-            <Button variant="secondary" size="sm" className="ml-auto" onClick={() => setViewing(true)}>
-              View
-              <ArrowRight className="size-3.5" />
-            </Button>
-          </div>
-          <div role="tabpanel" aria-label={OUTWARD_DOCUMENT_TITLE[doc]}>
-            {doc === "dc" ? (
-              <TitanChallanPreview line={line} vendorLabel={vendor} />
-            ) : (
-              <PurchaseOrderPreview line={line} vendorLabel={vendor} />
-            )}
+          ))}
+        </dl>
+
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
+          {lot == null ? (
+            <p role="alert" className="text-xs text-[var(--color-danger)]">
+              This line has no lot qty, so the accepted qty cannot be checked.
+            </p>
+          ) : (
+            <QuantityForm lot={lot} pending={pending} serverError={serverError} onRecord={onRecord} />
+          )}
+
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <div role="tablist" aria-label="Outward documents" className="flex flex-wrap gap-1">
+                {DOC_TABS.map((t) => (
+                  <button
+                    key={t.kind}
+                    type="button"
+                    role="tab"
+                    aria-selected={doc === t.kind}
+                    onClick={() => setDoc(t.kind)}
+                    className={cn(
+                      "ds-focus-ring inline-flex items-center gap-1 rounded-[var(--radius-sm)] border px-2 py-1 text-xs font-medium transition-colors",
+                      doc === t.kind
+                        ? "border-primary bg-[var(--color-primary-light)] text-primary"
+                        : "border-border-strong text-text-secondary hover:border-primary",
+                    )}
+                  >
+                    {OUTWARD_DOCUMENT_TITLE[t.kind]} ({t.tag})
+                  </button>
+                ))}
+              </div>
+              <Button variant="secondary" size="sm" className="ml-auto" onClick={() => setViewing(true)}>
+                View
+                <ArrowRight className="size-3.5" />
+              </Button>
+            </div>
+            <div role="tabpanel" aria-label={OUTWARD_DOCUMENT_TITLE[doc]}>
+              {doc === "dc" ? (
+                <TitanChallanPreview line={line} vendorLabel={vendor} />
+              ) : (
+                <PurchaseOrderPreview line={line} vendorLabel={vendor} />
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -138,7 +142,7 @@ export function ReceivingPanel({ line, vendorName, pending, serverError, onRecor
         view={viewing ? { kind: doc, line, vendorLabel: vendor } : null}
         onClose={closeView}
       />
-    </section>
+    </Modal>
   );
 }
 

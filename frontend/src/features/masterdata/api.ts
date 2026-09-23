@@ -32,6 +32,9 @@ export function masterdataApi<T>(resource: MdResource) {
  * Edit the transaction fields (box/tray/status) of the SAP outward row that
  * matches a SAP reference. Used by the SAP Upload screen. The service rejects
  * any box_uid / tray_id / tray_type that is not in the masters.
+ *
+ * A reference the SAP feed knows but masterdata has no line for yet is created
+ * from the SAP identifiers sent alongside the edit (see `outwardSeedFrom`).
  */
 export const patchOutwardByRef = (
   sapReferenceId: string,

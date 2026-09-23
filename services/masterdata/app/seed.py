@@ -20,6 +20,7 @@ from datetime import datetime
 import httpx
 from sqlalchemy import select
 
+from app import status_client
 from app.config import settings
 from app.db import SessionLocal
 from app.models import MasterModel, SapOutward, Vendor
@@ -140,11 +141,47 @@ async def run() -> None:
                     setattr(si, k, val)
                 updated += 1
 
-        # Every outward line carries a status; lines arrive from SAP already
-        # dispatched (revision 0021). Since revision 0020 it is a column on the line.
+        # Every outward line carries a status; a line arrives from SAP still to
+        # be dispatched (revision 0022) — a Box UID scanned on SAP Outward is
+        # what dispatches it. Since revision 0020 it is a column on the line.
         for si in (await session.scalars(select(SapOutward))).all():
             if not si.outward_status:
-                si.outward_status = "DISPATCHED"
+                si.outward_status = "NEW"
+
+        await session.flush()
+
+        # Reconcile the Status service. Dispatch used to be recorded only on the
+        # line itself, so lines that already carry a Box UID may be unknown to
+        # the Status service — and SAP Outward's Complete Table is built from
+        # what it knows. Report those now. Lines receiving has started on are
+        # left alone: they are already further along (RECEIVED), and reporting
+        # DISPATCHED would walk them backwards.
+        to_report = [
+            si
+            for si in (await session.scalars(select(SapOutward))).all()
+            if si.box_uid
+            and si.outward_status == "DISPATCHED"
+            and not si.received_pieces
+            and not si.inward_status
+        ]
+        if to_report:
+            try:
+                await status_client.report(
+                    [
+                        status_client.event(
+                            si.sap_reference_id,
+                            "outward",
+                            "DISPATCHED",
+                            note=f"box {si.box_uid} (backfilled by seed)",
+                        )
+                        for si in to_report
+                    ]
+                )
+                log.info("reported %d dispatched lines to the Status service", len(to_report))
+            except status_client.StatusServiceError as exc:
+                # Not fatal: the import itself is done, and a later Box UID scan
+                # or another seed run reports it again.
+                log.warning("could not report dispatched lines: %s", exc)
 
         await session.commit()
         log.info(

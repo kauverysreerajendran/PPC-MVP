@@ -11,12 +11,14 @@ Every master resource exposes the same REST surface:
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import false as sa_false
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +34,8 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 User = Annotated[Principal, Depends(current_principal)]
 
 router = APIRouter()
+
+log = logging.getLogger("masterdata.api")
 
 
 # --- repositories --------------------------------------------------------
@@ -171,7 +175,38 @@ class ListParams:
         self.with_total = with_total
 
 
-ListDep = Annotated[ListParams, Depends(ListParams)]
+def list_params(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=200),
+    search: str | None = Query(None, description="case-insensitive contains match"),
+    sort: str = Query("created_at"),
+    direction: str = Query("desc", pattern="^(asc|desc)$"),
+    status: s.Status | None = Query(None, description="filter by row status"),
+    with_total: bool = Query(
+        True,
+        description="false = skip the COUNT(*) (lookup fetches); total then equals the page length",
+    ),
+) -> ListParams:
+    """The shared list query, as a function rather than `Depends(ListParams)`.
+
+    This module uses `from __future__ import annotations`, so every annotation
+    is a string. FastAPI resolves those against the dependency's ``__globals__``
+    — which a *class* does not have, leaving ``s.Status`` an unresolved forward
+    reference and the OpenAPI schema (and so `/docs`) unbuildable. A function
+    carries its module globals, so the same signature resolves.
+    """
+    return ListParams(
+        page=page,
+        page_size=page_size,
+        search=search,
+        sort=sort,
+        direction=direction,
+        status=status,
+        with_total=with_total,
+    )
+
+
+ListDep = Annotated[ListParams, Depends(list_params)]
 
 
 async def _page(
@@ -230,7 +265,7 @@ async def update_model(
 
 
 @router.delete(
-    "/models/{obj_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["models"]
+    "/models/{obj_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None, tags=["models"]
 )
 async def delete_model(obj_id: uuid.UUID, session: Session, _u: User) -> None:
     await models_repo.soft_delete(session, obj_id)
@@ -274,7 +309,7 @@ async def update_plating_color(
 
 @router.delete(
     "/plating-colors/{obj_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_204_NO_CONTENT, response_model=None,
     tags=["plating-colors"],
 )
 async def delete_plating_color(obj_id: uuid.UUID, session: Session, _u: User) -> None:
@@ -310,7 +345,7 @@ async def update_vendor(
 
 
 @router.delete(
-    "/vendors/{obj_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["vendors"]
+    "/vendors/{obj_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None, tags=["vendors"]
 )
 async def delete_vendor(obj_id: uuid.UUID, session: Session, _u: User) -> None:
     await vendors_repo.soft_delete(session, obj_id)
@@ -385,7 +420,7 @@ async def update_location(
 
 
 @router.delete(
-    "/locations/{obj_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["locations"]
+    "/locations/{obj_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None, tags=["locations"]
 )
 async def delete_location(obj_id: uuid.UUID, session: Session, _u: User) -> None:
     await locations_repo.soft_delete(session, obj_id)
@@ -408,8 +443,24 @@ async def _validate_fks(session: AsyncSession, data: dict[str, Any]) -> None:
 
 
 async def _validate_master_refs(session: AsyncSession, data: dict[str, Any]) -> None:
-    """vendor_code / box_uid / tray_id / tray_type must already exist in the
-    masters — 'data not available in the master DB is not allowed'."""
+    """model_no / vendor_code / box_uid / tray_id / tray_type must already exist
+    in the masters — 'data not available in the master DB is not allowed'."""
+    model_no = data.get("model_no")
+    if model_no:
+        mid = await session.scalar(
+            select(m.MasterModel.id).where(
+                func.lower(m.MasterModel.model_no) == model_no.lower(),
+                m.MasterModel.status == "active",
+            )
+        )
+        if mid is None:
+            raise ConflictError(
+                f"model_no '{model_no}' is not registered in the Models master"
+            )
+        data.setdefault("model_id", mid)
+    elif "model_no" in data:  # explicitly cleared
+        data.setdefault("model_id", None)
+
     vendor_code = data.get("vendor_code")
     if vendor_code:
         vid = await session.scalar(
@@ -491,8 +542,9 @@ async def _assert_box_uid_unique(
 def _assert_box_uid_not_locked(row: m.SapOutward, data: dict[str, Any]) -> None:
     """Once a dispatched line has a Box UID, that UID is frozen.
 
-    Lines start DISPATCHED (revision 0021), so an empty Box UID must still be
-    settable — only a UID already entered is locked.
+    Lines start NEW / "Yet to Dispatch" (revision 0022) and are dispatched by
+    entering a Box UID, so an empty Box UID must still be settable — only a UID
+    already entered is locked.
     """
     if "box_uid" not in data:
         return
@@ -582,13 +634,28 @@ async def list_sap_outwards(
     tray_type: str | None = Query(None),
     outward_status: str | None = Query(None),
     inward_status: str | None = Query(None),
+    origin: str | None = Query(
+        None,
+        max_length=16,
+        description="Only lines with this provenance — 'SHORTAGE' for the back-orders "
+        "SAP Inward raises, 'SAP' for lines that came from the feed.",
+    ),
+    refs: str | None = Query(
+        None,
+        max_length=8000,
+        description="Comma-separated sap_reference_ids — only these lines are returned.",
+    ),
 ) -> Any:
+    # Used by the SAP Outward grid to fetch exactly the outward lines behind the
+    # SAP records on the page it is showing, instead of a blind first-200 window.
+    ref_list = [r.strip() for r in refs.split(",") if r.strip()][:200] if refs else None
     return await _page(
         outwards_repo,
         session,
         p,
         s.SapOutwardOut,
         extra_filters={
+            "sap_reference_id": ref_list,
             "vendor_id": vendor_id,
             "model_id": model_id,
             "movement_type": movement_type,
@@ -597,6 +664,7 @@ async def list_sap_outwards(
             "tray_type": tray_type,
             "outward_status": outward_status,
             "inward_status": inward_status,
+            "origin": origin,
         },
     )
 
@@ -615,8 +683,10 @@ async def create_sap_outward(
     await _validate_master_refs(session, data)
     await _assert_box_uid_unique(session, data.get("box_uid"))
     row = await outwards_repo.create(session, payload)
-    # Every outward line starts with a status: lines arrive already dispatched.
-    _sync_outward_status(row, _auto_outward_status(data) or "DISPATCHED")
+    # Every outward line starts with a status. A line arrives from SAP still to
+    # be dispatched (revision 0022) — entering a Box UID is what dispatches it,
+    # which is what moves it out of SAP Outward's Main Table.
+    _sync_outward_status(row, _auto_outward_status(data) or "NEW")
     await session.flush()
     return s.SapOutwardOut.model_validate(row)
 
@@ -648,37 +718,88 @@ async def update_sap_outward(
     tags=["sap-outwards"],
 )
 async def patch_sap_outward_by_ref(
-    sap_reference_id: str, payload: s.SapOutwardTxnPatch, session: Session, _u: User
+    sap_reference_id: str, payload: s.SapOutwardTxnPatch, session: Session, user: User
 ) -> Any:
     """Edit the transaction fields (box/tray/status) of the outward row that
-    matches a SAP reference — used by the SAP Upload screen."""
+    matches a SAP reference — used by the SAP Upload screen.
+
+    The SAP feed belongs to another service, so a reference can be shown on that
+    screen before masterdata has a line for it. The caller may then send the SAP
+    identifiers alongside the edit and the line is created from them; without a
+    ``transaction_date`` (the one non-nullable identifier) there is nothing to
+    create and the reference is simply unknown.
+    """
     row = await session.scalar(
         select(m.SapOutward).where(m.SapOutward.sap_reference_id == sap_reference_id)
     )
-    if row is None:
-        raise NotFoundError(f"sap_outward for reference '{sap_reference_id}'")
     data = payload.model_dump(exclude_unset=True)
+    seed = {k: data.pop(k) for k in s.SAP_OUTWARD_SEED_FIELDS if k in data}
+
+    created = row is None
+    if row is None:
+        if seed.get("transaction_date") is None:
+            raise NotFoundError(f"sap_outward for reference '{sap_reference_id}'")
+        # The seed carries the SAP identifiers, so it needs the same master
+        # check the edit fields below get — a line born here must not be the one
+        # line in the grid with an identifier no master knows.
+        await _validate_master_refs(session, seed)
+        row = m.SapOutward(sap_reference_id=sap_reference_id, **seed)
+        session.add(row)
+
     _assert_box_uid_not_locked(row, data)
     await _validate_master_refs(session, data)
-    await _assert_box_uid_unique(session, data.get("box_uid"), exclude_id=row.id)
+    await _assert_box_uid_unique(
+        session, data.get("box_uid"), exclude_id=None if created else row.id
+    )
     for key, value in data.items():
         if key == "outward_status":
             continue  # status is derived, never set directly — see _sync_outward_status
         setattr(row, key, value)
-    if (auto := _auto_outward_status(data)) is not None:
+    auto = _auto_outward_status(data)
+    if created and auto is None:
+        auto = "NEW"
+    if auto is not None:
         _sync_outward_status(row, auto)
     await session.flush()
+
+    # A Box UID dispatches the line, and the Status service is what the grids
+    # read back — report it here (same contract as sap_inward_scan) so the line
+    # reaches SAP Outward's Complete Table without waiting for a fallback. If
+    # the Status service refuses, this request fails and the write rolls back.
+    if auto == "DISPATCHED":
+        await status_client.report(
+            [
+                status_client.event(
+                    row.sap_reference_id,
+                    "outward",
+                    "DISPATCHED",
+                    actor=user.subject or None,
+                    note=f"box {row.box_uid} scanned",
+                )
+            ]
+        )
     return s.SapOutwardOut.model_validate(row)
 
 
 @router.delete(
-    "/sap-outwards/{obj_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["sap-outwards"]
+    "/sap-outwards/{obj_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None, tags=["sap-outwards"]
 )
 async def delete_sap_outward(obj_id: uuid.UUID, session: Session, _u: User) -> None:
     await outwards_repo.soft_delete(session, obj_id)
 
 
 # ========================== sap inward =================================
+#: The rack service reports a line PLACED at this stage once every received
+#: piece of it is in a tray. SAP Inward's Main / Complete split keys on it —
+#: masterdata keeps no rack column of its own (BLUEPRINT §12).
+_RACK_STAGE = "rack"
+_RACK_PLACED = "PLACED"
+#: Rack statuses that mean someone has started placing a line and not finished
+#: — SAP Inward's Main Table lists these without a scan (``started=true``) so
+#: half-done work from another shift stays reachable. Codes the Status master
+#: does not define yet simply match nothing.
+_RACK_STARTED = ("IN_PROGRESS", "DRAFT", "PARTIALLY_PLACED")
+
 _INWARD_SEARCH = (
     m.SapOutward.box_uid,
     m.SapOutward.dc_no,
@@ -700,16 +821,80 @@ async def list_sap_inward_lines(
     page_size: int = Query(50, ge=1, le=200),
     search: str | None = Query(None),
     inward_status: str | None = Query(None),
-) -> Any:
-    """Only the outward lines that a Box UID has actually been scanned against
-    (i.e. receiving has started). The SAP Inward grid stays empty until then."""
-    stmt = select(m.SapOutward).where(
-        m.SapOutward.status == "active",
-        or_(
-            m.SapOutward.received_pieces > 0,
-            m.SapOutward.inward_status.is_not(None),
+    stage: Literal["pending", "received"] | None = Query(
+        None,
+        description=(
+            "pending = SAP Inward's Main Table: dispatched lines not yet fully in "
+            "a rack — whether or not receiving has been recorded or verified; "
+            "received = the Complete Table: lines whose received pieces are all "
+            "placed (rack/PLACED). Omitted equals 'received'."
         ),
+    ),
+    started: bool = Query(
+        False,
+        description=(
+            "With stage=pending: only the lines whose rack placement has been "
+            "started and not finished (rack IN_PROGRESS / DRAFT / PARTIALLY_PLACED). "
+            "Ignored for stage=received. False keeps the full pending list."
+        ),
+    ),
+) -> Any:
+    """The outward lines SAP Inward works on.
+
+    A line stays in the Main Table (``stage=pending``) for its whole working
+    life — dispatched, received, verified — and crosses to the Complete Table
+    (``stage=received``, the default) only once every received piece is in a
+    rack. "In a rack" is not stored here: the rack service reports ``PLACED``
+    at the ``rack`` stage to the Status service, and this worklist asks that
+    service which references are in it (BLUEPRINT §12).
+
+    If the Status service cannot be reached the split falls back to the older
+    "has receiving been recorded" test, so SAP Inward keeps working.
+
+    ``started=true`` narrows the pending half to lines whose placement is under
+    way — SAP Inward shows those without a scan. If the Status service cannot
+    say which those are, that list is empty rather than everything.
+    """
+    pending = stage == "pending"
+    received_yet = or_(
+        m.SapOutward.received_pieces > 0,
+        m.SapOutward.inward_status.is_not(None),
     )
+    try:
+        placed = await status_client.refs_in(_RACK_STAGE, _RACK_PLACED)
+        placed_test = (
+            m.SapOutward.sap_reference_id.in_(placed)
+            if placed
+            else sa_false()
+        )
+    except status_client.StatusServiceError:
+        # Degrade, never 500: the worklist is what the floor works from.
+        log.warning(
+            "status refs unavailable — SAP Inward split falls back to the "
+            "'receiving recorded' test"
+        )
+        placed_test = None
+
+    # What keeps a line in the Main Table: not yet placed when the Status
+    # service answered, else (fallback) nothing received yet.
+    open_test = received_yet if placed_test is None else placed_test
+    stmt = select(m.SapOutward).where(m.SapOutward.status == "active")
+    if pending:
+        stmt = stmt.where(
+            m.SapOutward.box_uid.is_not(None),
+            m.SapOutward.outward_status == "DISPATCHED",
+            ~open_test,
+        )
+    else:
+        stmt = stmt.where(open_test)
+    if pending and started:
+        try:
+            begun = await status_client.refs_in(_RACK_STAGE, ",".join(_RACK_STARTED))
+        except status_client.StatusServiceError:
+            begun = []
+        stmt = stmt.where(
+            m.SapOutward.sap_reference_id.in_(begun) if begun else sa_false()
+        )
     if inward_status:
         stmt = stmt.where(m.SapOutward.inward_status == inward_status)
     if search:
@@ -719,11 +904,15 @@ async def list_sap_inward_lines(
     total = await session.scalar(
         select(func.count()).select_from(stmt.subquery())
     ) or 0
-    stmt = (
-        stmt.order_by(m.SapOutward.inward_last_scan_at.desc().nullslast())
-        .limit(page_size)
-        .offset((page - 1) * page_size)
+    # The Main Table now holds lines at every stage before placement, so the
+    # one just touched rises to the top; the Complete Table stays newest-first.
+    order = (
+        (m.SapOutward.inward_last_scan_at.desc().nullslast(),
+         m.SapOutward.transaction_date.desc())
+        if pending
+        else (m.SapOutward.inward_last_scan_at.desc().nullslast(),)
     )
+    stmt = stmt.order_by(*order).limit(page_size).offset((page - 1) * page_size)
     rows = (await session.scalars(stmt)).all()
     return {
         "items": [s.SapOutwardOut.model_validate(r) for r in rows],
@@ -865,6 +1054,107 @@ async def sap_inward_scan(
     )
 
 
+#: ``sap_outwards.origin`` of a line SAP Inward raised for the balance a
+#: receiving entry did not account for — a back-order, not a line from the feed.
+SHORTAGE_ORIGIN = "SHORTAGE"
+
+#: SAP identifiers a shortage back-order inherits verbatim from its parent.
+_BACKORDER_INHERITED = (
+    "sap_document_no",
+    "dc_no",
+    "po_no",
+    "material_no",
+    "model_no",
+    "vendor_code",
+    "vendor_id",
+    "model_id",
+    "batch_no",
+    "lot_no",
+    "movement_type",
+    "source_system",
+)
+
+
+async def _next_backorder_reference(session: AsyncSession, parent_ref: str) -> str:
+    """A unique ``sap_reference_id`` for a back-order of ``parent_ref``.
+
+    Generated here, never by the client: derived from the parent so the new line
+    reads as its child (``SAP-260920-037`` -> ``SAP-260920-037-S1``) and checked
+    against ``uq_sap_outwards_sap_reference_id``, counting the suffix up until
+    one is free. The parent's own reference is never reused.
+    """
+    for suffix in range(1, 1000):
+        candidate = f"{parent_ref}-S{suffix}"
+        if len(candidate) > 64:  # sap_reference_id is String(64)
+            break
+        taken = await session.scalar(
+            select(m.SapOutward.id).where(m.SapOutward.sap_reference_id == candidate)
+        )
+        if taken is None:
+            return candidate
+    raise ConflictError(
+        f"No free shortage reference left for '{parent_ref}' — nothing was saved."
+    )
+
+
+async def _raise_shortage_backorder(
+    parent: m.SapOutward,
+    shortage: Decimal,
+    session: AsyncSession,
+    *,
+    accepted: Decimal,
+    rejected: Decimal,
+) -> m.SapOutward:
+    """Create the outward line that carries a balance the vendor still owes.
+
+    The received line is never touched — it keeps its Box UID, its dispatched /
+    received status and its receiving figures. What did not arrive becomes a
+    *new* line with the same SAP identifiers, the shortage as its lot qty, no
+    Box UID and status ``PENDING``, so SAP Outward's Main Table offers it for
+    dispatch again.
+
+    The shortage alone is unaccountable, so the parent's figures at this very
+    moment are frozen on the new line (revision 0024): the whole trail
+    (lot − accepted − rejected = shortage, and what was received against it)
+    can then be shown wherever the back-order is, with no second fetch and no
+    risk of the parent being reset under it.
+    """
+    backorder = m.SapOutward(
+        sap_reference_id=await _next_backorder_reference(session, parent.sap_reference_id),
+        transaction_date=datetime.now(UTC),
+        quantity=shortage,
+        outward_status="PENDING",
+        parent_sap_reference_id=parent.sap_reference_id,
+        origin=SHORTAGE_ORIGIN,
+        shortage_parent_lot_qty=parent.quantity,
+        shortage_parent_accepted_qty=accepted,
+        shortage_parent_rejected_qty=rejected,
+        shortage_parent_received_qty=parent.received_qty,
+        outward_status_note=(
+            f"shortage {s._clean_number(shortage)} from {parent.sap_reference_id}"
+        ),
+        # box / tray / receiving fields stay at their defaults: this line has
+        # not been dispatched and nothing has been received against it.
+        **{f: getattr(parent, f) for f in _BACKORDER_INHERITED},
+    )
+    session.add(backorder)
+    await session.flush()
+    return backorder
+
+
+async def _backorder_of(session: AsyncSession, parent_ref: str) -> m.SapOutward | None:
+    """The live shortage back-order raised from this line, if there is one."""
+    return await session.scalar(
+        select(m.SapOutward)
+        .where(
+            m.SapOutward.parent_sap_reference_id == parent_ref,
+            m.SapOutward.origin == SHORTAGE_ORIGIN,
+            m.SapOutward.status == "active",
+        )
+        .limit(1)
+    )
+
+
 async def _record_qty_entry(
     row: m.SapOutward,
     payload: s.SapInwardScanIn,
@@ -930,32 +1220,68 @@ async def _record_qty_entry(
 
     out = s.SapOutwardOut.model_validate(row)
     n = s._clean_number
-    await status_client.report(
-        [
-            status_client.event(
-                row.sap_reference_id, "outward", "RECEIVED", actor=user.subject or None
+
+    # Whatever the lot did not account for is still owed, so it becomes its own
+    # outward line — same DC / PO / model / vendor / batch, the shortage as its
+    # lot qty, Pending — and the balance can be dispatched again. Exactly one
+    # per receiving entry: a second entry is refused until the line is Reset,
+    # and a Reset voids the back-order it raised.
+    shortage = (row.quantity - accepted - rejected).quantize(Decimal("0.001"))
+    backorder = (
+        await _raise_shortage_backorder(
+            row, shortage, session, accepted=accepted, rejected=rejected
+        )
+        if shortage > 0
+        else None
+    )
+
+    events = [
+        status_client.event(
+            row.sap_reference_id, "outward", "RECEIVED", actor=user.subject or None
+        ),
+        status_client.event(
+            row.sap_reference_id,
+            "inward",
+            "YET_TO_VERIFY",
+            actor=user.subject or None,
+            note=(
+                f"accepted {n(accepted)} ({n(half)}F/{n(half)}B) · rejected {n(rejected)}"
+                f" · shortage {out.shortage_qty} of {n(row.quantity)}"
             ),
+        ),
+    ]
+    if backorder is not None:
+        # The Status service is what splits SAP Outward into Main / Complete
+        # (everything not DISPATCHED / RECEIVED stays in Main), so the new line
+        # is reported there like any other — Pending, naming its parent.
+        events.append(
             status_client.event(
-                row.sap_reference_id,
-                "inward",
-                "YET_TO_VERIFY",
+                backorder.sap_reference_id,
+                "outward",
+                "PENDING",
                 actor=user.subject or None,
                 note=(
-                    f"accepted {n(accepted)} ({n(half)}F/{n(half)}B) · rejected {n(rejected)}"
-                    f" · shortage {out.shortage_qty} of {n(row.quantity)}"
-                ),
-            ),
-        ]
+                    f"shortage {n(shortage)} of {n(row.quantity)}"
+                    f" from {row.sap_reference_id}"
+                )[:_STATUS_NOTE_MAX],
+            )
+        )
+    await status_client.report(events)
+
+    message = (
+        f"{row.model_no or 'lot'} · accepted {n(accepted)} "
+        f"({n(half)} front / {n(half)} back) · rejected {n(rejected)}"
+        f" · shortage {out.shortage_qty} of {n(row.quantity)}"
     )
+    if backorder is not None:
+        message += f" → new line {backorder.sap_reference_id}"
     return s.SapInwardScanResult(
         matched=True,
-        message=(
-            f"{row.model_no or 'lot'} · accepted {n(accepted)} "
-            f"({n(half)} front / {n(half)} back) · rejected {n(rejected)}"
-            f" · shortage {out.shortage_qty} of {n(row.quantity)}"
-        ),
+        message=message,
         scan=_scan_out(row.id, entry),
         outward=out,
+        backorder=s.SapOutwardOut.model_validate(backorder) if backorder else None,
+        backorder_sap_reference_id=backorder.sap_reference_id if backorder else None,
     )
 
 
@@ -984,8 +1310,28 @@ async def sap_inward_close(
 )
 async def sap_inward_reset(obj_id: uuid.UUID, session: Session, user: User) -> Any:
     """Wipe the receiving tally and every scan for this line — and put its
-    statuses back: outward → Dispatched, inward → Not received."""
+    statuses back: outward → Dispatched, inward → Not received.
+
+    A receiving entry that left a shortage raised a back-order line for the
+    balance; undoing the entry voids that line too, so the two never disagree.
+    Once the back-order has itself been dispatched there is a real box against
+    it and undoing is no longer possible — the reset is refused and says so.
+    """
     row = await outwards_repo.get(session, obj_id)
+    backorder = await _backorder_of(session, row.sap_reference_id)
+    if backorder is not None and (
+        backorder.box_uid or backorder.outward_status == "DISPATCHED"
+    ):
+        raise ConflictError(
+            f"The shortage line {backorder.sap_reference_id} raised from this entry has "
+            f"already been dispatched (box {backorder.box_uid or '—'}), so the receiving "
+            "entry can no longer be reset."
+        )
+    if backorder is not None:
+        backorder.status = "inactive"
+        backorder.outward_status_note = (
+            f"voided — receiving reset on {row.sap_reference_id}"
+        )
     row.inward_scans = []
     row.received_pieces = 0
     row.received_qty = None
@@ -1110,7 +1456,7 @@ async def update_tray(
 
 
 @router.delete(
-    "/trays/{obj_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["trays"]
+    "/trays/{obj_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None, tags=["trays"]
 )
 async def delete_tray(obj_id: uuid.UUID, session: Session, _u: User) -> None:
     await trays_repo.soft_delete(session, obj_id)
@@ -1149,7 +1495,7 @@ async def update_box(
 
 
 @router.delete(
-    "/boxes/{obj_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["boxes"]
+    "/boxes/{obj_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None, tags=["boxes"]
 )
 async def delete_box(obj_id: uuid.UUID, session: Session, _u: User) -> None:
     await boxes_repo.soft_delete(session, obj_id)

@@ -70,6 +70,24 @@ async def run_migrations_online() -> None:
     # connection closes without ever being committed.
     async with connectable.connect() as schema_connection:
         await schema_connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{SCHEMA}"'))
+        # Alembic would create `alembic_version.version_num` as VARCHAR(32), but
+        # this service's revision ids are descriptive and some are longer than
+        # that — stamping one then fails with "value too long for type character
+        # varying(32)" and the chain stops. Own the table here (alembic creates
+        # it only if it is missing) and widen one made earlier at 32.
+        await schema_connection.execute(
+            text(
+                f'CREATE TABLE IF NOT EXISTS "{SCHEMA}".alembic_version ('
+                "version_num VARCHAR(128) NOT NULL, "
+                "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))"
+            )
+        )
+        await schema_connection.execute(
+            text(
+                f'ALTER TABLE IF EXISTS "{SCHEMA}".alembic_version '
+                "ALTER COLUMN version_num TYPE VARCHAR(128)"
+            )
+        )
         await schema_connection.commit()
     async with connectable.connect() as connection:
         await connection.run_sync(_run_migrations)

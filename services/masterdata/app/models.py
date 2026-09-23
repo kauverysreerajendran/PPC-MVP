@@ -55,7 +55,15 @@ NAMING_CONVENTION = {
 
 STATUS_VALUES = ("active", "inactive")
 LOCATION_TYPES = ("WAREHOUSE", "RACK", "ROW", "SHELF", "BIN")
-OUTWARD_STATUS_VALUES = ("NEW", "ALLOCATED", "PACKED", "DISPATCHED", "HOLD")
+OUTWARD_STATUS_VALUES = (
+    "NEW",
+    "ALLOCATED",
+    "PACKED",
+    "DISPATCHED",
+    "HOLD",
+    # a shortage back-order raised by SAP Inward, waiting to be dispatched again
+    "PENDING",
+)
 
 
 #: schema this service owns inside the single shared PostgreSQL database
@@ -264,6 +272,7 @@ class SapOutward(Base, TimestampMixin, StatusMixin):
         Index("ix_sap_outwards_tray_type", "tray_type"),
         Index("ix_sap_outwards_outward_status", "outward_status"),
         Index("ix_sap_outwards_inward_status", "inward_status"),
+        Index("ix_sap_outwards_parent_sap_reference_id", "parent_sap_reference_id"),
         CheckConstraint(
             "inward_status IS NULL OR inward_status IN "
             "('PENDING','PARTIAL','RECEIVED','SHORT','OVER')",
@@ -272,7 +281,7 @@ class SapOutward(Base, TimestampMixin, StatusMixin):
         CheckConstraint("received_pieces >= 0", name="received_pieces_non_negative"),
         CheckConstraint(
             "outward_status IS NULL OR outward_status IN "
-            "('NEW','ALLOCATED','PACKED','DISPATCHED','HOLD')",
+            "('NEW','ALLOCATED','PACKED','DISPATCHED','HOLD','PENDING')",
             name="outward_status_allowed",
         ),
         CheckConstraint(
@@ -306,6 +315,34 @@ class SapOutward(Base, TimestampMixin, StatusMixin):
     movement_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     source_system: Mapped[str] = mapped_column(
         String(64), nullable=False, default="SAP-ECC", server_default="SAP-ECC"
+    )
+
+    # --- provenance (revision 0023) ---
+    #: the line a shortage back-order was raised from; NULL for a feed line.
+    parent_sap_reference_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: how this line came to be: 'SAP' (the feed) or 'SHORTAGE' (raised by SAP
+    #: Inward for the balance left over after the accepted qty was recorded).
+    origin: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, default="SAP", server_default="SAP"
+    )
+
+    # --- shortage snapshot (revision 0024) ---
+    # A back-order carries only the shortage as its own lot qty, which on its
+    # own is unaccountable. These four columns freeze the parent's figures at
+    # the moment the back-order was raised, so the quantity trail
+    # (lot → accepted / rejected → received → shortage) stays truthful even if
+    # the parent is later reset or received again. NULL on every other line.
+    shortage_parent_lot_qty: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 3), nullable=True
+    )
+    shortage_parent_accepted_qty: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 3), nullable=True
+    )
+    shortage_parent_rejected_qty: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 3), nullable=True
+    )
+    shortage_parent_received_qty: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 3), nullable=True
     )
 
     # --- box / tray / status tracking (validated against the masters) ---

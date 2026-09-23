@@ -154,10 +154,16 @@ class RackOccupy(BaseModel):
 
 
 class PlacePiece(BaseModel):
-    """One received piece going into one tray."""
+    """One tray-load of received stock: the tray, and what goes into it.
+
+    ``pieces`` defaults to 1 so a caller written when a tray held exactly one
+    piece keeps its old meaning.
+    """
 
     slot_id: uuid.UUID
-    #: whole parts carried by this piece
+    #: received pieces (cases) this tray takes — capped by the tray's capacity
+    pieces: int = Field(default=1, ge=1)
+    #: whole parts carried by those pieces
     qty: Decimal | None = Field(default=None, ge=0)
 
 
@@ -167,8 +173,13 @@ class RackPlaceIn(BaseModel):
     sap_reference_id: str = Field(min_length=1, max_length=64)
     model_no: Code
     lot_no: str | None = Field(default=None, max_length=64)
-    #: pieces received so far — decides Partially placed vs Placed
+    #: pieces received so far — decides Partially placed vs Placed when
+    #: ``received_qty`` is absent
     received_pieces: int = Field(ge=1)
+    #: accepted quantity of the line. When sent, trays are filled and the line
+    #: is judged by *quantity*: each tray takes up to its capacity in qty, and
+    #: the line is Placed once the qty in racks reaches this number.
+    received_qty: Decimal | None = Field(default=None, gt=0)
     pieces: list[PlacePiece] = Field(min_length=1, max_length=200)
 
 
@@ -194,6 +205,7 @@ class RackOut(ORMModel):
     occupied_by_model: str | None
     date_of_occupied: datetime | None
     qty: Decimal | None = None
+    pieces: int | None = None
     lot_no: str | None = None
     sap_reference_id: str | None = None
     placement_source: str | None = None
@@ -413,17 +425,26 @@ class AllocateOut(BaseModel):
 
 class RackPlacedOut(BaseModel):
     sap_reference_id: str
-    #: received pieces of this line already in trays
+    #: received pieces of this line already in trays (a tray may hold several)
     placed: int
+    #: trays those pieces occupy
+    trays: int = 0
+    #: quantity of this line already in trays (the sum of those trays' ``qty``)
+    placed_qty: Decimal = Decimal(0)
     slots: list[RackOut]
 
 
 class RackPlaceOut(BaseModel):
     sap_reference_id: str
+    #: received pieces stored by this call
     placed_now: int
     #: received pieces of this line now in racks, including earlier placements
     placed_total: int
     received_pieces: int
+    #: quantity stored by this call / now in racks — set when judged by qty
+    placed_qty_now: Decimal | None = None
+    placed_qty_total: Decimal | None = None
+    received_qty: Decimal | None = None
     #: the rack status reported to the Status service
     rack_status: Literal["PARTIALLY_PLACED", "PLACED"]
     slots: list[RackOut]

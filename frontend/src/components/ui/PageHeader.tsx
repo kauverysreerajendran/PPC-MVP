@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from "react";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
+import { cn } from "@/lib/cn";
 
 export type Crumb = { label: string; href?: string };
 
@@ -35,14 +36,29 @@ export function PageHeader({
   description,
   breadcrumbs,
   actions,
+  actionsAlign = "end",
 }: {
   title: string;
   description?: ReactNode;
   breadcrumbs?: Crumb[];
   actions?: ReactNode;
+  /**
+   * Where the actions sit from `sm` up. "end" (the default) pushes them to the
+   * far right of the header. "start" keeps them beside the title so the row
+   * reads left to right — for a page whose action belongs to the heading
+   * itself, such as Scan's lookup field, rather than a corner button.
+   */
+  actionsAlign?: "end" | "start";
 }) {
   return (
-    <div className="ds-animate-fade-up mb-5 flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-end sm:justify-between">
+    <div
+      className={cn(
+        "ds-animate-fade-up mb-5 flex flex-col gap-3 border-b border-border pb-4 sm:flex-row",
+        actionsAlign === "start"
+          ? "sm:items-center sm:justify-start sm:gap-6"
+          : "sm:items-end sm:justify-between",
+      )}
+    >
       <div className="space-y-1">
         {breadcrumbs ? <Breadcrumb items={breadcrumbs} /> : null}
         <h1 className="text-xl font-semibold">{title}</h1>

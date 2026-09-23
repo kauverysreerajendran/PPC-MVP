@@ -43,7 +43,11 @@ async def list_records(
     status_stage: Literal["outward", "inward", "rack"] | None = Query(
         None, description="Split by a status held in the Status service (with status_code)."
     ),
-    status_code: str | None = Query(None, max_length=32),
+    status_code: str | None = Query(
+        None,
+        max_length=200,
+        description="One status code, or several comma-separated (matches any of them).",
+    ),
     status_match: Literal["include", "exclude"] = Query(
         "include", description="include = only lines in that status; exclude = all others"
     ),

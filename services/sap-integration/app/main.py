@@ -16,6 +16,7 @@ from app.admin import init_admin
 from app.api import router as sap_router
 from app.config import settings
 from app.db import dispose_engine, engine
+from app.errors import init_error_handlers
 from app.sync_loop import sync_loop
 from app.timing import ServerTimingMiddleware
 
@@ -69,6 +70,7 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
 
+    init_error_handlers(app)
     app.add_middleware(ServerTimingMiddleware)  # docs/10 §7
 
     @app.get("/healthz", include_in_schema=False)

@@ -41,36 +41,36 @@ SEED_PROVIDER = "seed"
 #: Vendors match the masterdata vendor master, so the seeded lines resolve to
 #: real vendors once masterdata is seeded from this feed.
 _VENDORS: dict[str, str] = {
-    "V1001": "Precision Polishing Works",
-    "V1002": "Chola Plating & Finishing",
-    "V1003": "Kovai Surface Tech",
-    "V1004": "Sri Balaji Metal Finishers",
+    "KALAI-INDUSTRIES": "Kalai Industries",
+    "SHINE-TIMES": "Shine Times",
 }
 
-#: (vendor_code, model_no, quantity, days_ago, hour). Model numbers are the real
-#: ones off the shop-floor RACK-K chart. This WIM flow only handles goods
-#: receipts, so every line is movement type 101.
+#: (vendor_code, model_no, quantity, days_ago, hour). Quantities are multiples
+#: of 20: a lot splits down the middle into front and back cases, and both
+#: halves are themselves round (120 -> 60 + 60), which is how the shop floor
+#: counts them. Model numbers are the real ones off the RACK-K chart. This WIM
+#: flow only handles goods receipts, so every line is movement type 101.
 _ROWS: list[tuple[str, str, int, int, int]] = [
-    ("V1001", "90086", 120, 6, 9),
-    ("V1002", "90102", 260, 6, 11),
-    ("V1003", "90110", 75, 5, 10),
-    ("V1004", "90127", 340, 5, 14),
-    ("V1001", "90140", 180, 4, 9),
-    ("V1002", "90142", 95, 4, 13),
-    ("V1003", "90148", 420, 4, 16),
-    ("V1004", "90169", 210, 3, 10),
-    ("V1001", "90174", 150, 3, 12),
-    ("V1002", "90198", 275, 3, 15),
-    ("V1003", "90086", 60, 2, 9),
-    ("V1004", "90102", 390, 2, 11),
-    ("V1001", "90110", 225, 2, 14),
-    ("V1002", "90127", 110, 1, 9),
-    ("V1003", "90140", 305, 1, 12),
-    ("V1004", "90142", 165, 1, 15),
-    ("V1001", "90148", 85, 0, 9),
-    ("V1002", "90169", 250, 0, 10),
-    ("V1003", "90174", 130, 0, 13),
-    ("V1004", "90198", 360, 0, 16),
+    ("KALAI-INDUSTRIES", "90086", 120, 6, 9),
+    ("SHINE-TIMES", "90102", 260, 6, 11),
+    ("KALAI-INDUSTRIES", "90110", 80, 5, 10),
+    ("SHINE-TIMES", "90127", 340, 5, 14),
+    ("KALAI-INDUSTRIES", "90140", 180, 4, 9),
+    ("SHINE-TIMES", "90142", 100, 4, 13),
+    ("KALAI-INDUSTRIES", "90148", 420, 4, 16),
+    ("SHINE-TIMES", "90169", 200, 3, 10),
+    ("KALAI-INDUSTRIES", "90174", 160, 3, 12),
+    ("SHINE-TIMES", "90198", 280, 3, 15),
+    ("KALAI-INDUSTRIES", "90086", 60, 2, 9),
+    ("SHINE-TIMES", "90102", 400, 2, 11),
+    ("KALAI-INDUSTRIES", "90110", 220, 2, 14),
+    ("SHINE-TIMES", "90127", 120, 1, 9),
+    ("KALAI-INDUSTRIES", "90140", 300, 1, 12),
+    ("SHINE-TIMES", "90142", 160, 1, 15),
+    ("KALAI-INDUSTRIES", "90148", 80, 0, 9),
+    ("SHINE-TIMES", "90169", 240, 0, 10),
+    ("KALAI-INDUSTRIES", "90174", 120, 0, 13),
+    ("SHINE-TIMES", "90198", 360, 0, 16),
 ]
 
 SEED_COUNT = len(_ROWS)

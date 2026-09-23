@@ -12,13 +12,16 @@ const keys = {
   syncRuns: ["sap", "sync-runs"] as const,
 };
 
-export function useSapRecords(params: ListRecordsParams = {}) {
+export function useSapRecords(params: ListRecordsParams = {}, opts: { enabled?: boolean } = {}) {
   const interval = usePollingInterval();
   return useQuery({
     queryKey: keys.records(params),
     queryFn: ({ signal }) => sapApi.listRecords(params, { signal }),
     placeholderData: (prev) => prev,
     ...transactionalQueryOptions(interval),
+    // A lookup query (e.g. the back-orders' parents) asks for nothing until it
+    // has references to ask about — without this it would fetch page 1 twice.
+    ...(opts.enabled === undefined ? {} : { enabled: opts.enabled }),
   });
 }
 

@@ -66,6 +66,24 @@ export interface SapOutward extends AuditFields {
   quantity: number | string | null;
   movement_type: string | null;
   source_system: string;
+  /**
+   * Provenance. A shortage back-order — the new line SAP Inward raises for the
+   * balance a receiving entry did not account for — carries `origin`
+   * `"SHORTAGE"` and the reference of the line it came from; a line from the
+   * SAP feed carries `"SAP"` (or null, for rows written before revision 0023).
+   */
+  parent_sap_reference_id: string | null;
+  origin: string | null;
+  /**
+   * The parent line's figures frozen when this shortage back-order was raised
+   * (masterdata revision 0024), so the quantity trail — lot, accepted, QED
+   * rejected, received, and this line's own qty as the pending shortage — can
+   * be shown without fetching the parent. Null on every other line.
+   */
+  shortage_parent_lot_qty?: number | string | null;
+  shortage_parent_accepted_qty?: number | string | null;
+  shortage_parent_rejected_qty?: number | string | null;
+  shortage_parent_received_qty?: number | string | null;
   model_id: string | null;
   vendor_id: string | null;
   plating_color_id: string | null;
@@ -151,6 +169,10 @@ export interface ListParams {
   sort?: string;
   direction?: "asc" | "desc";
   status?: MdStatus;
+  /** comma-separated sap_reference_ids — only those lines (sap-outwards only) */
+  refs?: string;
+  /** provenance filter — "SHORTAGE" for back-orders, "SAP" for feed lines (sap-outwards only) */
+  origin?: string;
 }
 
 export type MdRecord =

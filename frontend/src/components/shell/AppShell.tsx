@@ -13,6 +13,7 @@ import { Sidebar } from "./Sidebar";
 import { UserMenu } from "./UserMenu";
 import { NotificationMenu } from "./NotificationMenu";
 import { LiveIndicator } from "./LiveIndicator";
+import { ServiceOutageBanner } from "./ServiceOutageBanner";
 
 export function AppShell({ user, children }: { user: User; children: React.ReactNode }) {
   const pathname = usePathname();
@@ -100,6 +101,7 @@ export function AppShell({ user, children }: { user: User; children: React.React
           <UserMenu user={user} />
         </div>
       </header>
+      <ServiceOutageBanner />
 
       {/* ---------- body ---------- */}
       <div className="flex min-h-0 flex-1">

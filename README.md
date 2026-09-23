@@ -14,7 +14,27 @@ A production-ready, horizontally-scalable full-stack SaaS foundation.
 | CI/CD | GitHub Actions |
 | Observability | structlog JSON, Prometheus metrics, OTel-ready, Sentry-ready |
 
-## Quick start (local)
+## Quick start (native, no Docker — the usual dev loop)
+
+The app is **six processes**: Next.js (:3000) proxies `/api/v1/*` to the
+backend (:8000) and four microservices — sap-integration (:8001), masterdata
+(:8002), rack (:8003), status (:8004). If any one of them is not running, every
+browser call to it comes back from the Next proxy as a bare
+`500 Internal Server Error`. Start them all with one command:
+
+```bash
+python dev.py            # (or double-click dev.cmd) starts whatever is not already running; Ctrl+C stops it
+python dev.py --check    # who is up? (postgres + all six ports)
+check.cmd                # typecheck + lint + every pytest suite → .dev\check.log
+python dev.py --migrate  # alembic upgrade head in every service first
+python dev.py --only backend,masterdata --no-frontend
+```
+
+Logs are prefixed per process; the script waits for each `/healthz` and prints
+a status table. The frontend shows a red "Service not running" bar under the
+header naming the exact process whenever a call is proxied to a dead port.
+
+## Quick start (Docker)
 
 ```bash
 cp .env.example .env

@@ -93,6 +93,27 @@ async def report(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ) from exc
 
 
+async def refs_in(stage: str, code: str) -> list[str]:
+    """Every SAP reference currently in ``code`` at ``stage``.
+
+    The mirror of :func:`report`: a worklist that splits on a status asks the
+    Status service which references are in it and filters its own rows by them,
+    instead of keeping a copy of the status here.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(
+                f"{_base()}/refs", params={"stage": stage, "code": code}, headers=_headers()
+            )
+            resp.raise_for_status()
+            return list(resp.json().get("refs", []))
+    except httpx.HTTPError as exc:
+        log.warning("status refs lookup failed (%s/%s): %s", stage, code, exc)
+        raise StatusServiceError(
+            "Status service is unavailable — cannot filter by status."
+        ) from exc
+
+
 async def current(sap_reference_id: str) -> dict[str, dict[str, Any]]:
     """Current status per stage of one SAP line (stages never reported are absent)."""
     try:

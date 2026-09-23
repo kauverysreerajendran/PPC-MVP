@@ -67,4 +67,6 @@ export interface ListRecordsParams {
 
 export interface RecordUpdate {
   remark?: string;
+  /** Lot qty — whole and even only (the lot splits into front / back cases). */
+  quantity?: number;
 }

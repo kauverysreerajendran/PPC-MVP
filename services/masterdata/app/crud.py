@@ -59,8 +59,12 @@ class CrudRepository(Generic[M]):
         rows on this page."""
         where: list[ColumnElement[bool]] = []
         for field, value in (filters or {}).items():
-            if value is not None:
-                where.append(getattr(self.model, field) == value)
+            if value is None:
+                continue
+            col = getattr(self.model, field)
+            # A list/tuple filter means "any of these" — e.g. the SAP Outward
+            # grid asking for exactly the references on the page it is showing.
+            where.append(col.in_(value) if isinstance(value, (list, tuple)) else col == value)
         if search and self.searchable:
             like = f"%{search.strip()}%"
             conds: list[ColumnElement[bool]] = [c.ilike(like) for c in self.searchable]

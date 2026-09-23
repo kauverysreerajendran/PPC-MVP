@@ -73,3 +73,18 @@ def init_error_handlers(app: FastAPI) -> None:
                 }
             },
         )
+
+    @app.exception_handler(Exception)
+    async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
+        """Last resort (docs/07): never a bare text 500. The JSON envelope also
+        lets the frontend tell "the service crashed on this request" apart from
+        "the service is not running" (a bare 500 from the Next proxy)."""
+        log.error("unhandled error: %s", exc, exc_info=exc)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=_body(
+                "internal_error",
+                "internal server error",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+            ),
+        )

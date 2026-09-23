@@ -202,7 +202,7 @@ export interface SelectedLocation {
   sap_reference_id?: string | null;
 }
 
-/** A tray chosen for one received piece in placement mode. */
+/** A tray chosen for one tray-load of received pieces in placement mode. */
 export interface ChosenTray {
   id: string;
   code: string;
@@ -214,30 +214,48 @@ export interface ChosenTray {
   tray_no: number;
 }
 
-/** POST /rack/place — store received pieces of one SAP line. */
+/**
+ * POST /rack/place — store received pieces of one SAP line.
+ *
+ * One entry per *tray*: `qty` is the quantity that tray takes (up to its
+ * capacity, the last tray usually partial). With `received_qty` set the
+ * service judges the line by quantity — Placed once the qty in racks reaches
+ * it; without it, by `pieces` against `received_pieces` as before.
+ */
 export interface PlaceRequest {
   sap_reference_id: string;
   model_no: string;
   lot_no?: string | null;
   received_pieces: number;
-  pieces: { slot_id: string; qty?: number | null }[];
+  received_qty?: number;
+  pieces: { slot_id: string; pieces?: number; qty?: number | null }[];
 }
 
 export interface PlacedSlot {
   id: string;
   code: string;
+  /** sent by the service (a full rack row); older callers ignore them */
+  warehouse_code?: string;
+  aisle_code?: string;
   rack_code: string;
   shelf_no: number;
   row_no: number;
   tray_no: number;
   qty: number | string | null;
+  /** received pieces in this tray (NULL on rows written one piece per tray) */
+  pieces?: number | null;
   date_of_occupied: string | null;
 }
 
 /** GET /rack/place/{sap_reference_id} — received pieces already in trays. */
 export interface PlacedResult {
   sap_reference_id: string;
+  /** received pieces already in racks — a tray may hold several */
   placed: number;
+  /** trays those pieces occupy */
+  trays?: number;
+  /** quantity of this line already in trays (Decimal — may arrive as a string) */
+  placed_qty?: number | string;
   slots: PlacedSlot[];
 }
 
@@ -246,6 +264,9 @@ export interface PlaceResult {
   placed_now: number;
   placed_total: number;
   received_pieces: number;
+  placed_qty_now?: number | string | null;
+  placed_qty_total?: number | string | null;
+  received_qty?: number | string | null;
   rack_status: "PARTIALLY_PLACED" | "PLACED";
   slots: PlacedSlot[];
 }

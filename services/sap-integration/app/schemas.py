@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 T = TypeVar("T")
 
@@ -61,6 +61,20 @@ class SapInwardRecordUpdate(BaseModel):
     """The only fields a frontend user may change."""
 
     remark: str | None = Field(default=None, max_length=4000)
+    quantity: Decimal | None = Field(default=None, gt=0)
+
+    @field_validator("quantity")
+    @classmethod
+    def _even_lot(cls, v: Decimal | None) -> Decimal | None:
+        # A lot is split down the middle into front and back cases, so an odd
+        # (or fractional) lot qty can never divide equally.
+        if v is None:
+            return v
+        if v != v.to_integral_value():
+            raise ValueError("lot qty must be a whole number")
+        if int(v) % 2 != 0:
+            raise ValueError("lot qty must be an even number so it splits equally")
+        return v.to_integral_value()
 
 
 class SyncRunOut(BaseModel):

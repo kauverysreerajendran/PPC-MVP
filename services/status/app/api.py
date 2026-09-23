@@ -202,14 +202,25 @@ async def list_refs(
     session: Session,
     _u: User,
     stage: s.Stage = Query(...),
-    code: str = Query(..., min_length=1, max_length=32),
+    code: str = Query(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="one status code, or several comma-separated (matches any of them)",
+    ),
 ) -> Any:
     """Every SAP reference currently in one status — for other services to
-    filter their own lists by (e.g. SAP Outward's Open / Completed tabs)."""
+    filter their own lists by (e.g. SAP Outward's Main / Complete tabs).
+
+    ``code`` may name several statuses (``DISPATCHED,RECEIVED``): a line matches
+    when its current code at that stage is any of them. A single code behaves
+    exactly as before.
+    """
+    codes = [c.strip() for c in code.split(",") if c.strip()]
     refs = (
         await session.scalars(
             select(m.LineStatus.sap_reference_id).where(
-                m.LineStatus.stage == stage, m.LineStatus.code == code
+                m.LineStatus.stage == stage, m.LineStatus.code.in_(codes)
             )
         )
     ).all()

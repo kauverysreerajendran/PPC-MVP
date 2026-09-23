@@ -1,6 +1,7 @@
 import { publicEnv } from "@/config/env";
 import { ApiError, NetworkError, type ApiErrorBody } from "./errors";
-import { parseServerTiming, recordSample } from "@/lib/perf";
+import { markServiceDown, markServiceUp, parseServerTiming, recordSample } from "@/lib/perf";
+import { serviceFor } from "./services";
 
 /**
  * Central typed API client. One place for:
@@ -13,6 +14,11 @@ import { parseServerTiming, recordSample } from "@/lib/perf";
  *  - per-request timing sample (browser only) for lib/perf.ts — total wall time
  *    plus the server's own `Server-Timing: app;dur=` so network vs server cost
  *    is visible (docs/10 §7)
+ *  - fast, precise failure when a backend process is not running: the Next
+ *    proxy answers a bare `500 Internal Server Error` (text, no JSON envelope,
+ *    no Server-Timing) when it cannot reach an upstream. That is turned into a
+ *    503 `service_unavailable` ApiError naming the service — no retry, no
+ *    back-off — and the service is flagged in lib/perf.ts for the outage banner.
  *
  * Business logic never talks to fetch directly — it calls feature `api.ts` modules
  * which call this client.
@@ -23,7 +29,7 @@ export interface RequestOptions extends Omit<RequestInit, "body"> {
   body?: unknown;
   /** ms; default 15000 */
   timeoutMs?: number;
-  /** retry idempotent requests on network/5xx; default 2 for GET */
+  /** retry idempotent requests on network/5xx; default 1 for GET */
   retries?: number;
   /** bearer token override (server-side rendering passes it explicitly) */
   accessToken?: string;
@@ -31,6 +37,17 @@ export interface RequestOptions extends Omit<RequestInit, "body"> {
 }
 
 const IDEMPOTENT = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * A 401 from these endpoints is the *answer* (bad credentials, expired or
+ * missing refresh cookie), not a stale access token — refreshing and retrying
+ * would only recurse (`/auth/refresh` -> 401 -> refresh -> ...).
+ */
+const NO_REFRESH_PATHS = ["/auth/login", "/auth/refresh", "/auth/register", "/auth/logout"];
+
+function isAuthEndpoint(path: string): boolean {
+  return NO_REFRESH_PATHS.some((p) => path === p || path.startsWith(`${p}?`));
+}
 
 function baseUrl(): string {
   if (typeof window === "undefined") {
@@ -83,7 +100,7 @@ async function raw<T>(method: string, path: string, opts: RequestOptions): Promi
     query,
     body,
     timeoutMs = 15_000,
-    retries = IDEMPOTENT.has(method) ? 2 : 0,
+    retries = IDEMPOTENT.has(method) ? 1 : 0,
     accessToken,
     headers,
     signal,
@@ -141,7 +158,13 @@ async function raw<T>(method: string, path: string, opts: RequestOptions): Promi
         throw new NetworkError(err);
       }
 
-      if (res.status === 401 && tokenProvider && typeof window !== "undefined" && !opts.accessToken) {
+      if (
+        res.status === 401 &&
+        tokenProvider &&
+        typeof window !== "undefined" &&
+        !opts.accessToken &&
+        !isAuthEndpoint(path)
+      ) {
         const refreshed = await tokenProvider.refresh();
         if (refreshed) {
           (init.headers as Record<string, string>).Authorization = `Bearer ${refreshed}`;
@@ -153,6 +176,21 @@ async function raw<T>(method: string, path: string, opts: RequestOptions): Promi
 
       if (!res.ok) {
         sample(res, startedAt);
+        if (res.status >= 500 && isUpstreamUnreachable(res)) {
+          // The owning process is down. Retrying only delays the message.
+          const svc = serviceFor(path);
+          if (browser) markServiceDown(svc, path);
+          throw new ApiError(
+            {
+              error: {
+                code: "service_unavailable",
+                message: `${svc.name} service is not running (port ${svc.port})`,
+                status: 503,
+              },
+            },
+            503,
+          );
+        }
         if (res.status >= 500 && attempt++ < retries) {
           await backoff(attempt);
           continue;
@@ -161,11 +199,23 @@ async function raw<T>(method: string, path: string, opts: RequestOptions): Promi
       }
       const decoded = await decode<T>(res);
       sample(res, startedAt);
+      if (browser) markServiceUp(serviceFor(path));
       return decoded;
     }
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * A 5xx produced by the Next proxy itself (upstream connection refused) rather
+ * than by a backend: every backend returns a JSON error envelope, and every
+ * successful hop through a backend carries `Server-Timing`.
+ */
+function isUpstreamUnreachable(res: Response): boolean {
+  if (res.headers.get("server-timing")) return false;
+  const type = res.headers.get("content-type") ?? "";
+  return !type.includes("json");
 }
 
 async function decode<T>(res: Response): Promise<T> {
@@ -174,7 +224,9 @@ async function decode<T>(res: Response): Promise<T> {
 }
 
 function backoff(attempt: number): Promise<void> {
-  const ms = Math.min(1000 * 2 ** (attempt - 1), 4000) + Math.random() * 200;
+  // Short: a transient 5xx usually clears within a few hundred ms, and the
+  // user is looking at a spinner while we wait.
+  const ms = Math.min(300 * 2 ** (attempt - 1), 1500) + Math.random() * 100;
   return new Promise((r) => setTimeout(r, ms));
 }
 

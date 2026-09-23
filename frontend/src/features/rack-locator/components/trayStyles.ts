@@ -1,3 +1,4 @@
+import { RACK_TONE, RACK_TONES, toneForFillPercent, type RackTone } from "@/components/rack";
 import type { RackState, SlotState } from "../types";
 
 /**
@@ -15,9 +16,10 @@ export const TRAY_STATE: Record<
 > = {
   empty: {
     className:
-      "border-teal-300 bg-teal-100 text-teal-800 hover:border-teal-500 hover:bg-teal-200 dark:border-teal-700 dark:bg-[#123c43] dark:text-teal-100 dark:hover:border-teal-500",
+      "border-[color-mix(in_srgb,var(--color-empty)_40%,transparent)] bg-[var(--color-empty-bg)] text-[var(--color-empty)] hover:border-[var(--color-empty)]",
     label: "Empty Tray",
-    swatch: "border-teal-300 bg-teal-100 dark:border-teal-700 dark:bg-[#123c43]",
+    swatch:
+      "border-[color-mix(in_srgb,var(--color-empty)_40%,transparent)] bg-[var(--color-empty-bg)]",
   },
   occupied: {
     className:
@@ -49,67 +51,84 @@ export const SELECTED_TRAY = {
   label: "Selected Tray",
 };
 
-export const TRAY_LEGEND: SlotState[] = ["occupied", "empty", "reserved", "blocked"];
-
 /**
- * Rack fill scale — free reads green through to full reading red, same light
- * palette as everywhere else in the app: free = success (green), half filled
- * = warning (yellow), partial/nearly full = orange, fully filled = danger
- * (red). Tray-level "occupied" (an individual slot that's taken) is a
- * separate, unrelated grey in `TRAY_STATE` and is untouched by this scale.
+ * The one occupancy scale used everywhere in Rack Locator — five distinct
+ * colours, free to full, matching the backend's `RackState`
+ * (`services/rack/app/topology.py::_rack_state`):
+ *
+ *   empty (0%) -> blue | available (<50%) -> green | filling (50-84%) -> yellow
+ *   | nearly_full (85-99%) -> orange | full (100%) -> red
+ *
+ * `empty` is a genuine blue (`--color-empty`), not teal, so an empty tile
+ * never reads as a selected/active one (selection uses `--color-primary`,
+ * which is teal). Every rack tile, shelf pill, tray swatch and legend swatch
+ * pulls from this table — nothing elsewhere hardcodes a tone.
+ *
+ * | state       | light text/fill | light bg  | dark text/fill | dark bg   |
+ * |-------------|------------------|-----------|-----------------|-----------|
+ * | empty       | #2563eb          | #e8f0fe   | #7aa2f7         | #16233f  |
+ * | available   | #0f9d58          | #e7f6ee   | (same)          | (same)   |
+ * | filling     | #b8860b          | #fdf4e3   | (same)          | (same)   |
+ * | nearly_full | #c2670f          | #fbe9d8   | (same)          | (same)   |
+ * | full        | #d64545          | #fdecec   | (same)          | (same)   |
  */
-export const RACK_STATE: Record<
-  RackState,
-  { label: string; tone: "neutral" | "success" | "info" | "warning" | "orange" | "danger" }
+export type OccupancyTone = RackTone;
+
+export const OCCUPANCY_SCALE: Record<
+  OccupancyTone,
+  { label: string; text: string; bg: string; fill: string; ring: string }
 > = {
-  empty: { label: "Empty", tone: "success" },
-  available: { label: "Available", tone: "success" },
-  filling: { label: "Filling", tone: "warning" },
-  nearly_full: { label: "Nearly Full", tone: "orange" },
-  full: { label: "Full", tone: "danger" },
+  empty: {
+    label: RACK_TONE.empty.label,
+    text: "text-[var(--color-empty)]",
+    bg: "bg-[var(--color-empty-bg)]",
+    fill: "bg-[var(--color-empty)]",
+    ring: "ring-[color-mix(in_srgb,var(--color-empty)_35%,transparent)]",
+  },
+  available: {
+    label: RACK_TONE.available.label,
+    text: "text-[var(--color-success)]",
+    bg: "bg-[var(--color-success-bg)]",
+    fill: "bg-[var(--color-success)]",
+    ring: "ring-[color-mix(in_srgb,var(--color-success)_35%,transparent)]",
+  },
+  filling: {
+    label: RACK_TONE.filling.label,
+    text: "text-[var(--color-warning)]",
+    bg: "bg-[var(--color-warning-bg)]",
+    fill: "bg-[var(--color-warning)]",
+    ring: "ring-[color-mix(in_srgb,var(--color-warning)_35%,transparent)]",
+  },
+  nearly_full: {
+    label: RACK_TONE.nearly_full.label,
+    text: "text-[var(--color-orange)]",
+    bg: "bg-[var(--color-orange-bg)]",
+    fill: "bg-[var(--color-orange)]",
+    ring: "ring-[color-mix(in_srgb,var(--color-orange)_35%,transparent)]",
+  },
+  full: {
+    label: RACK_TONE.full.label,
+    text: "text-[var(--color-danger)]",
+    bg: "bg-[var(--color-danger-bg)]",
+    fill: "bg-[var(--color-danger)]",
+    ring: "ring-[color-mix(in_srgb,var(--color-danger)_35%,transparent)]",
+  },
 };
 
-export const TONE_TEXT = {
-  neutral: "text-text-secondary",
-  success: "text-[var(--color-success)]",
-  info: "text-[var(--color-info)]",
-  warning: "text-[var(--color-warning)]",
-  orange: "text-[var(--color-orange)]",
-  danger: "text-[var(--color-danger)]",
-} as const;
+/** `rack.state` maps 1:1 onto the occupancy scale — same key, same tone. */
+export const RACK_STATE: Record<RackState, { label: string; tone: OccupancyTone }> =
+  Object.fromEntries(
+    RACK_TONES.map((tone) => [tone, { label: RACK_TONE[tone].label, tone }]),
+  ) as Record<RackState, { label: string; tone: OccupancyTone }>;
 
-/** Light pastel fill — the bar/chip background for each rack fill tone. */
-export const TONE_BG = {
-  neutral: "bg-[var(--color-surface-2)]",
-  success: "bg-[var(--color-success-bg)]",
-  info: "bg-[var(--color-info-bg)]",
-  warning: "bg-[var(--color-warning-bg)]",
-  orange: "bg-[var(--color-orange-bg)]",
-  danger: "bg-[var(--color-danger-bg)]",
-} as const;
-
-/** Solid version of the same tone — used for the filled portion of a bar. */
-export const TONE_FILL = {
-  neutral: "bg-text-muted",
-  success: "bg-[var(--color-success)]",
-  info: "bg-[var(--color-info)]",
-  warning: "bg-[var(--color-warning)]",
-  orange: "bg-[var(--color-orange)]",
-  danger: "bg-[var(--color-danger)]",
-} as const;
+export const OCCUPANCY_LEGEND: OccupancyTone[] = RACK_TONES;
 
 /**
- * Same free→full colour bucketing the backend uses for `rack.state`
- * (`services/rack/app/topology.py::_rack_state`), applied to a bare
- * percentage — for spots (like a shelf's mini elevation bar) that only carry
- * an occupancy_pct, not a full state.
+ * Same free->full bucketing as `rack.state`, applied to a bare percentage —
+ * for spots (a shelf's mini elevation bar, a shelf pill) that only carry an
+ * `occupancy_pct`, not a full `RackState`.
  */
-export function toneForOccupancyPct(occupancyPct: number): keyof typeof TONE_FILL {
-  if (occupancyPct >= 100) return "danger";
-  if (occupancyPct >= 85) return "orange";
-  if (occupancyPct >= 50) return "warning";
-  return "success";
-}
+export const toneForOccupancyPct = toneForFillPercent;
 
 /** `1,234` — thousands separators keep large tray counts readable. */
 export function num(n: number): string {
@@ -129,3 +148,55 @@ export function rowPositionLabel(rowNo: number, rowCount: number): string {
   if (rowCount % 2 === 1 && rowNo === (rowCount + 1) / 2) return "Middle";
   return "";
 }
+
+/**
+ * The matrix bars (`components/rack/RackMatrix`). Same states as `TRAY_STATE`,
+ * drawn as thin horizontal bars rather than numbered boxes, so the cell has to
+ * read at a glance from across an aisle: solid green = taken, pale grey =
+ * free, and everything else deliberately quieter so those two carry the shape
+ * of the column.
+ */
+export const TRAY_BAR: Record<SlotState, { className: string; label: string }> = {
+  empty: {
+    className:
+      "bg-border-strong hover:bg-[color-mix(in_srgb,var(--color-empty)_60%,var(--color-border-strong))]",
+    label: "Empty",
+  },
+  occupied: {
+    className: "bg-[var(--color-success)]",
+    label: "Filled (bottom to top)",
+  },
+  reserved: {
+    className:
+      "bg-[color-mix(in_srgb,var(--color-warning)_55%,var(--color-border-strong))] hover:bg-[var(--color-warning)]",
+    label: "Reserved",
+  },
+  blocked: {
+    className:
+      "cursor-not-allowed bg-[repeating-linear-gradient(45deg,var(--color-surface-2),var(--color-surface-2)_2px,var(--color-border-strong)_2px,var(--color-border-strong)_4px)]",
+    label: "Blocked",
+  },
+};
+
+/** The bar the user has chosen — outlined rather than recoloured, so the
+ * filled/empty read of the column survives the selection. */
+export const SELECTED_BAR = {
+  className: "bg-primary",
+  label: "Selected",
+};
+
+/** A Locate Me suggestion that hasn't been taken yet. */
+export const SUGGESTED_BAR = {
+  className: "bg-primary",
+  label: "Suggested (ranked)",
+};
+
+/** Filled and empty first — the two tones the matrix is really made of. */
+export const TRAY_BAR_LEGEND: { className: string; label: string }[] = [
+  TRAY_BAR.occupied,
+  TRAY_BAR.empty,
+  TRAY_BAR.reserved,
+  TRAY_BAR.blocked,
+  SELECTED_BAR,
+  SUGGESTED_BAR,
+];

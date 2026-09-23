@@ -193,6 +193,7 @@ class Rack(Base, TimestampMixin, StatusMixin):
             "placement_source IS NULL OR placement_source IN ('allocation','receiving')",
             name="placement_source_allowed",
         ),
+        CheckConstraint("pieces IS NULL OR pieces >= 1", name="pieces_positive"),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -223,6 +224,10 @@ class Rack(Base, TimestampMixin, StatusMixin):
     # ``lot_no`` / ``sap_reference_id`` trace it back to the SAP outward document
     # and double as the idempotency key for the allocator.
     qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 3), nullable=True)
+    #: received pieces (cases) stored in this tray — receiving placements only,
+    #: where one tray holds up to ``capacity.tray_capacity`` pieces. NULL on a
+    #: row written before trays could hold more than one piece, and read as 1.
+    pieces: Mapped[int | None] = mapped_column(Integer, nullable=True)
     lot_no: Mapped[str | None] = mapped_column(String(64), nullable=True)
     sap_reference_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     #: how the tray was filled — NULL / "allocation" = the outward allocator,

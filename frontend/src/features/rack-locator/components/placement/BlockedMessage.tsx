@@ -5,8 +5,8 @@ import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 
 /**
- * Step 1 blocking states (docs/08 §2.3 — say what happened and what to do).
- * Nothing else renders on the page while one of these is showing.
+ * Placement blocking states (docs/08 §2.3 — say what happened and what to
+ * do). Shown in place of the line context, above the locator itself.
  */
 export function BlockedMessage({
   title,

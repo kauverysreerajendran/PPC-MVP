@@ -43,11 +43,16 @@ def test_tables_live_in_status_schema() -> None:
 
 
 def _seeded_definitions() -> list[tuple]:
-    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0001_initial.py"
-    spec = importlib.util.spec_from_file_location("status_0001", path)
-    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    spec.loader.exec_module(module)  # type: ignore[union-attr]
-    return module.DEFINITIONS
+    """Every status the migrations seed — 0001 plus each later revision that
+    adds one (they all expose the same ``DEFINITIONS`` tuple shape)."""
+    versions = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+    defs: list[tuple] = []
+    for path in sorted(versions.glob("0*.py")):
+        spec = importlib.util.spec_from_file_location(f"status_{path.stem}", path)
+        module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+        spec.loader.exec_module(module)  # type: ignore[union-attr]
+        defs.extend(getattr(module, "DEFINITIONS", []))
+    return defs
 
 
 def test_seed_covers_every_stage_with_one_initial_status() -> None:
@@ -60,6 +65,8 @@ def test_seed_covers_every_stage_with_one_initial_status() -> None:
     for needed in (
         ("outward", "DISPATCHED"),
         ("outward", "RECEIVED"),
+        # a shortage back-order raised by SAP Inward, still to be dispatched
+        ("outward", "PENDING"),
         ("inward", "NOT_RECEIVED"),
         ("inward", "YET_TO_VERIFY"),
         ("inward", "VERIFIED"),
@@ -75,3 +82,50 @@ def test_event_rejects_unknown_stage() -> None:
     except ValueError:
         return
     raise AssertionError("unknown stage accepted")
+
+
+def test_refs_matches_any_of_several_comma_separated_codes() -> None:
+    """SAP Outward's Complete Table asks for `DISPATCHED,RECEIVED` in one call:
+    a line is complete once dispatched, and stays so after it is received."""
+    from fastapi.testclient import TestClient
+
+    from app.db import get_session
+    from app.security import Principal, current_principal
+
+    seen: list[str] = []
+
+    class FakeSession:
+        async def scalars(self, stmt):
+            seen.append(str(stmt))
+
+            class _Rows:
+                def all(self):
+                    return ["SAP-1", "SAP-2"]
+
+            return _Rows()
+
+    async def fake_session():
+        yield FakeSession()
+
+    app.dependency_overrides[get_session] = fake_session
+    app.dependency_overrides[current_principal] = lambda: Principal(subject="dev", role=None)
+    try:
+        client = TestClient(app)
+        many = client.get(
+            f"{PREFIX}/refs", params={"stage": "outward", "code": "DISPATCHED,RECEIVED"}
+        )
+        one = client.get(f"{PREFIX}/refs", params={"stage": "outward", "code": "RECEIVED"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert many.status_code == 200, many.text
+    assert many.json() == {
+        "stage": "outward",
+        "code": "DISPATCHED,RECEIVED",
+        "count": 2,
+        "refs": ["SAP-1", "SAP-2"],
+    }
+    # Both forms use the same IN predicate — one code behaves exactly as before.
+    assert "line_status.code IN" in seen[0]
+    assert one.status_code == 200, one.text
+    assert "line_status.code IN" in seen[1]
