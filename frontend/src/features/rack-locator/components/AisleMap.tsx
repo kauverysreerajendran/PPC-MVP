@@ -61,7 +61,7 @@ export function AisleMap({
 const SIDE_LABEL: Record<string, string> = { L: "Left", R: "Right" };
 
 /** Racks grouped by the side of the aisle they face, left before right. */
-function groupBySide(racks: RackSummary[]) {
+export function groupBySide(racks: RackSummary[]) {
   const ordered = [...racks].sort((a, b) => a.position - b.position);
   const keys = [...new Set(ordered.map((r) => (r.side ?? "").trim().toUpperCase()))].sort(
     (a, b) => sideRank(a) - sideRank(b) || a.localeCompare(b),

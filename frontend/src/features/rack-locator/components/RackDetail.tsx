@@ -1,30 +1,41 @@
 "use client";
 
-import { useMemo } from "react";
-import { ArrowLeft } from "lucide-react";
+import { useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { RackMatrix, type MatrixShelf, type MatrixTray } from "@/components/rack";
-import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/cn";
 import type {
   Recommendation,
   RackDetail as RackDetailData,
   SelectedLocation,
+  SlotState,
   Tray,
 } from "../types";
 import { DEFAULT_TRAY_CAPACITY_QTY } from "../trayCapacity";
+import { ViewModeToggle } from "./three/ViewModeToggle";
+import { canUseWebGL, useLocatorViewMode } from "./three/sceneKit";
 import {
-  OCCUPANCY_SCALE,
-  RACK_STATE,
+  BAY_TRAY,
   SELECTED_BAR,
   SUGGESTED_BAR,
   TRAY_BAR,
-  TRAY_BAR_LEGEND,
   TRAY_STATE,
-  num,
 } from "./trayStyles";
 
+// three.js is heavy and browser-only — load the 3D rack after the page.
+const RackBay3D = dynamic(() => import("./three/RackBay3D").then((m) => m.RackBay3D), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[clamp(440px,60vh,580px)] animate-pulse rounded-[var(--radius-md)] bg-surface-2" />
+  ),
+});
+
+const LEGEND_STATES: SlotState[] = ["empty", "occupied", "reserved", "blocked"];
+
 /**
- * The hero: one rack as a shelf x column matrix, Shelf 1 at the top.
+ * The hero: one rack as a shelf x column matrix, Shelf 1 at the top — drawn in
+ * 3D (`three/RackBay3D`) by default, or flat as `RackMatrix` on the Grid toggle
+ * or when WebGL is missing. Both read the same `shelves` built below.
  *
  * Nothing about the geometry is assumed — shelves, the rows within each shelf
  * and the trays within each row are exactly what the service returned. This
@@ -42,7 +53,6 @@ export function RackDetailView({
   recommendations,
   suggestedCodes,
   onSelect,
-  onBack,
   className,
   pickerMode,
   chosenCodes,
@@ -55,8 +65,6 @@ export function RackDetailView({
    * taken; anything not free is never in here */
   suggestedCodes?: readonly string[] | undefined;
   onSelect: (location: SelectedLocation) => void;
-  /** back out of this rack to the aisle's rack list */
-  onBack?: (() => void) | undefined;
   className?: string;
   /** Placement tray picker: restrict picking to empty/reserved trays, with
    * occupied/blocked trays disabled and labelled rather than a no-op click. */
@@ -67,9 +75,11 @@ export function RackDetailView({
    * of one column in one click; receives that column's free trays, tray 1 up */
   onSelectColumn?: ((trays: SelectedLocation[]) => void) | undefined;
 }) {
-  const { occupancy } = detail;
-  const state = RACK_STATE[detail.state];
-  const scale = OCCUPANCY_SCALE[state.tone];
+  const mode = useLocatorViewMode();
+  const [noGl, setNoGl] = useState(false);
+  const glOk = !noGl && canUseWebGL();
+  const show3d = mode === "3d" && glOk;
+  const [slotFilter, setSlotFilter] = useState<SlotState | null>(null);
   const rackTitle = detail.rack_name ?? `Rack ${detail.rack_code}`;
 
   // every tray on the drawing, indexed by its location code, so a click on a
@@ -248,92 +258,71 @@ export function RackDetailView({
     });
   }
 
-  // every figure read off the live response — none of them is a constant
-  const summary: { label: string; value: string }[] = [
-    { label: "Rack Name", value: rackTitle },
-    { label: "Total Shelves", value: num(detail.shelf_count) },
-    { label: "Columns per Shelf", value: num(detail.row_count) },
-    { label: "Trays per Column", value: num(detail.tray_count) },
-    { label: "Total Capacity", value: num(occupancy.capacity) },
-    { label: "Filled", value: num(occupancy.occupied) },
-    { label: "Empty", value: num(occupancy.empty) },
-  ];
+
+  const ariaLabel = `${rackTitle}, ${detail.shelf_count} shelves of ${detail.row_count} columns, ${detail.tray_count} trays each`;
 
   return (
     <section
       className={cn(
-        "rounded-[var(--radius-lg)] border border-border bg-surface p-5 shadow-[var(--shadow-sm)]",
+        "rounded-[var(--radius-lg)] border border-border bg-surface p-3 shadow-[var(--shadow-sm)]",
         className,
       )}
       aria-label={`Rack ${detail.rack_code}`}
     >
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex flex-wrap items-center gap-3">
-            <h2 className="text-2xl font-semibold tracking-tight text-text">{rackTitle}</h2>
-            <span
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset",
-                scale.bg,
-                scale.text,
-                scale.ring,
-              )}
-            >
-              <span className="size-1.5 rounded-full bg-current" aria-hidden />
-              {scale.label}
-            </span>
-          </div>
-          <p className="mt-1 text-xs text-text-secondary">
-            Aisle {detail.aisle_code} · {detail.warehouse_name ?? detail.warehouse_code}
-          </p>
+      {/* view tabs on the left, the state key on the right — in 3D the key
+          doubles as a filter that dims every tray in another state */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        {glOk ? <ViewModeToggle mode={show3d ? "3d" : "grid"} variant="tabs" /> : <span />}
+        <div className="flex flex-wrap items-center gap-1 rounded-full border border-border bg-surface px-1.5 py-1 shadow-[var(--shadow-sm)]">
+          {LEGEND_STATES.map((st) => {
+            const on = slotFilter === st;
+            const swatch = show3d ? BAY_TRAY[st].className : TRAY_BAR[st].className;
+            const label = BAY_TRAY[st].label;
+            return show3d ? (
+              <button
+                key={st}
+                type="button"
+                onClick={() => setSlotFilter(on ? null : st)}
+                aria-pressed={on}
+                title={on ? "Show every tray" : `Show only ${label.toLowerCase()} trays`}
+                className={cn(
+                  "ds-focus-ring inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium transition-colors",
+                  on ? "bg-surface-2 text-text ring-1 ring-border-strong" : "text-text-secondary hover:text-text",
+                  slotFilter && !on && "opacity-50",
+                )}
+              >
+                <span className={cn("size-2.5 rounded-full", swatch)} aria-hidden />
+                {label}
+              </button>
+            ) : (
+              <span key={st} className="inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium text-text-secondary">
+                <span className={cn("size-2.5 rounded-full", swatch)} aria-hidden />
+                {label}
+              </span>
+            );
+          })}
         </div>
-        {onBack ? (
-          <Button variant="secondary" size="sm" onClick={onBack}>
-            <ArrowLeft className="size-3.5" />
-            Back to Rack List
-          </Button>
-        ) : null}
       </div>
 
-      {/* the matrix takes the room; the summary and legend ride alongside it
-          once the column is wide enough, and stack under it when it is not */}
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_216px]">
-        <RackMatrix
+      {show3d ? (
+        <RackBay3D
           shelves={shelves}
           columnLabels={columnLabels}
           onSelect={handleSelect}
-          ariaLabel={`${rackTitle}, ${detail.shelf_count} shelves of ${detail.row_count} columns, ${detail.tray_count} trays each`}
+          ariaLabel={ariaLabel}
+          onNoWebGL={() => setNoGl(true)}
+          slotFilter={slotFilter}
         />
-
-        <aside className="space-y-3">
-          <div className="rounded-[var(--radius-md)] border border-border bg-surface-2 p-4">
-            <h3 className="mb-2.5 text-sm font-semibold text-text">Rack Summary</h3>
-            <dl className="space-y-1.5 text-xs">
-              {summary.map((row) => (
-                <div key={row.label} className="flex items-baseline justify-between gap-3">
-                  <dt className="text-text-secondary">{row.label}</dt>
-                  <dd className="text-right font-medium tabular-nums text-text">{row.value}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-
-          <div className="rounded-[var(--radius-md)] border border-border bg-surface-2 p-4">
-            <h3 className="mb-2.5 text-sm font-semibold text-text">Legend</h3>
-            <ul className="space-y-1.5 text-xs text-text-secondary">
-              {TRAY_BAR_LEGEND.map((entry) => (
-                <li key={entry.label} className="flex items-center gap-2">
-                  <span
-                    className={cn("h-2.5 w-6 shrink-0 rounded-[2px]", entry.className)}
-                    aria-hidden
-                  />
-                  {entry.label}
-                </li>
-              ))}
-            </ul>
-          </div>
-        </aside>
-      </div>
+      ) : (
+        <div className="min-w-0 px-1 pb-1">
+          <RackMatrix
+            shelves={shelves}
+            columnLabels={columnLabels}
+            onSelect={handleSelect}
+            ariaLabel={ariaLabel}
+          />
+        </div>
+      )}
     </section>
   );
 }

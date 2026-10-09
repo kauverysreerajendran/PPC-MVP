@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { LogIn, LogOut, Pencil, Plus, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DataTable, type Column } from "@/components/ui/DataTable";
@@ -22,6 +23,17 @@ import {
   useRackUpdate,
 } from "../hooks";
 import type { RackListParams, RackSlot } from "../types";
+
+// three.js is heavy and browser-only — load the 3D view after the page.
+const Rack3DExplorer = dynamic(
+  () => import("./rack3d/Rack3DExplorer").then((m) => m.Rack3DExplorer),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="mb-4 h-[493px] animate-pulse rounded-[var(--radius-md)] border border-border bg-surface" />
+    ),
+  },
+);
 
 const EMPTY = {
   warehouse_code: "",
@@ -244,6 +256,42 @@ export function RackView() {
         breadcrumbs={[{ label: "Racks" }]}
       />
 
+      <Rack3DExplorer
+        filter={{ search, occupied: occupiedFilter }}
+        toolbar={
+          <>
+            <SearchBar
+              value={search}
+              onChange={(v) => {
+                setSearch(v);
+                setPage(1);
+              }}
+              placeholder="Search rack, location, model…"
+              className="w-56 sm:w-64"
+            />
+            <select
+              aria-label="Slot filter"
+              value={occupiedFilter}
+              onChange={(e) => {
+                setOccupiedFilter(e.target.value as "" | "true" | "false");
+                setPage(1);
+              }}
+              className="h-9 rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2 text-sm"
+            >
+              <option value="">All slots</option>
+              <option value="true">Occupied</option>
+              <option value="false">Empty</option>
+            </select>
+          </>
+        }
+        actions={
+          <Button onClick={openCreate}>
+            <Plus className="size-4" aria-hidden />
+            New Slot
+          </Button>
+        }
+      />
+
       <DataTable<RackSlot>
         columns={columns}
         rows={rows}
@@ -255,36 +303,10 @@ export function RackView() {
         emptyDescription="Create a slot, or load the RACK-K chart via the Alembic seed migration."
         toolbar={
           <>
-            <SearchBar
-              value={search}
-              onChange={(v) => {
-                setSearch(v);
-                setPage(1);
-              }}
-              placeholder="Search rack, location, model…"
-              className="w-64"
-            />
-            <select
-              value={occupiedFilter}
-              onChange={(e) => {
-                setOccupiedFilter(e.target.value as "" | "true" | "false");
-                setPage(1);
-              }}
-              className="rounded-[var(--radius-sm)] border border-border-strong bg-surface px-2 py-1.5 text-sm"
-            >
-              <option value="">All slots</option>
-              <option value="true">Occupied</option>
-              <option value="false">Empty</option>
-            </select>
+            <span className="text-sm font-semibold text-text">Slots</span>
             {list.isFetching ? (
               <span className="text-xs text-text-muted">Refreshing…</span>
             ) : null}
-            <div className="ml-auto">
-              <Button size="sm" onClick={openCreate}>
-                <Plus className="size-4" aria-hidden />
-                New Slot
-              </Button>
-            </div>
           </>
         }
         footer={

@@ -24,6 +24,7 @@
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "sweetalert2": "^11.26.25",
+    "three": "^0.180.0",
     "zod": "3.23.8",
     "zustand": "5.0.1"
   },
@@ -37,6 +38,7 @@
     "@types/node": "22.9.0",
     "@types/react": "19.0.1",
     "@types/react-dom": "19.0.1",
+    "@types/three": "^0.180.0",
     "@vitejs/plugin-react": "4.3.3",
     "eslint": "9.14.0",
     "eslint-config-next": "15.5.25",

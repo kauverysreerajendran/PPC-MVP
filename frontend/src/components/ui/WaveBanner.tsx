@@ -80,8 +80,10 @@ export function WaveBanner({
             </nav>
           ) : null}
           <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-          {subtitle ? (
+          {typeof subtitle === "string" ? (
             <p className="text-sm text-text-secondary">{subtitle}</p>
+          ) : subtitle ? (
+            <div className="text-sm text-text-secondary">{subtitle}</div>
           ) : null}
         </div>
         {actions ? (

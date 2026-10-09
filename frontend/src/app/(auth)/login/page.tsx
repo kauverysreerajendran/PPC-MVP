@@ -2,34 +2,34 @@ import type { Metadata } from "next";
 import type { CSSProperties } from "react";
 import Image from "next/image";
 import { LoginForm } from "@/features/auth/components/LoginForm";
-import scene from "@/assets/images/login-scene-clean.webp";
-import arm from "@/assets/images/login-arm-clean.webp";
-import swoosh from "@/assets/images/login-swoosh.webp";
+import scene from "@/assets/images/login-scene-12.webp";
+import arm from "@/assets/images/login-arm-12.webp";
+import swoosh from "@/assets/images/login-swoosh-12.webp";
 
 export const metadata: Metadata = { title: "Sign in" };
 
 /*
- * The process artwork (4.png) split into three layers so the operator can
+ * The process artwork (12.png) split into three layers so the operator can
  * actually move:
  *
- *   login-scene-clean.webp   the office, trays and label, with the arm painted out
- *   login-arm-clean.webp     the hand + scanner, cut out with its own alpha
- *   login-swoosh.webp  the teal corner, on top so the sleeve tucks under it
+ *   login-scene-12.webp    the office, trays and label, with the arm painted out
+ *   login-arm-12.webp      the hand + scanner + sleeve, cut out with its own alpha
+ *   login-swoosh-12.webp   the teal corner, on top so the sleeve tucks under it
  *
- * Every number below is in 4.png's own pixels (2048 × 768). The stylesheet only
+ * Every number below is in 12.png's own pixels (1774 × 887). The stylesheet only
  * ever sees percentages derived here, so nothing is measured twice and a
  * re-shot backdrop means editing this block alone.
  */
-const SCENE = { w: 2048, h: 768 };
+const SCENE = { w: 1774, h: 887 };
 /** Where the arm layer sits in the scene, and its size. */
-const ARM = { x: 882, y: 372, w: 851, h: 396 };
+const ARM = { x: 810, y: 429, w: 725, h: 390 };
 /** Scanner nose, in the arm layer's own pixels — the light comes out here. */
-const NOSE = { x: 4, y: 102 };
+const NOSE = { x: 12, y: 70 };
 /** Where the teal corner layer sits. */
-const SWOOSH = { x: 1628, y: 409, w: 420, h: 359 };
-/** The WC-45827-A label the light lands on — a portrait label, tilted with
- *  the tray face (measured off the repainted label in the backdrop). */
-const LABEL = { cx: 803, cy: 535, w: 93, h: 110, deg: -12 };
+const SWOOSH = { x: 1283, y: 430, w: 491, h: 457 };
+/** The WC-45B27-A label the light lands on — near square, tilted with the
+ *  tray face (measured off the label in the backdrop). */
+const LABEL = { cx: 732, cy: 576, w: 74, h: 76, deg: -15 };
 
 const pct = (value: number, of: number) => `${+((value / of) * 100).toFixed(4)}%`;
 
@@ -72,6 +72,10 @@ const labelStyle = {
 export default function LoginPage() {
   return (
     <div className="login-page">
+      {/* the margins around the fitted banner: a blurred copy of it */}
+      <div className="login-backdrop" aria-hidden>
+        <Image src={scene} alt="" fill sizes="50vw" className="object-cover" />
+      </div>
       {/* One box for the backdrop and every layer on it — the size
           `object-cover` would give the picture, worked out explicitly — so a
           percentage inside it always lands on the same pixel of the artwork

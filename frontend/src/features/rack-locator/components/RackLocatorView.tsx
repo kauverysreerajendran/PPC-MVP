@@ -59,9 +59,18 @@ import { ConfirmBar } from "./placement/ConfirmBar";
 import { LineIdentityRow } from "./placement/LineIdentityRow";
 import { PlacedSummary } from "./placement/PlacedSummary";
 import { TraysInHand } from "./placement/TraysInHand";
-import { OverviewHeaderCard } from "./OverviewHeaderCard";
+import {
+  LocatorHeaderControls,
+  LocatorHeaderInfo,
+  LocatorOverviewBar,
+  LocatorTitleRow,
+} from "./OverviewHeaderCard";
+import { PendingPlacementsPanel } from "./placement/PendingPlacementsStrip";
 import { RackDetailView } from "./RackDetail";
+import { AisleSummaryCard, LegendCard, RackSummaryCard } from "./RackSidePanels";
 import { RackOverview } from "./RackOverview";
+import { ViewModeToggle } from "./three/ViewModeToggle";
+import { useLocatorViewMode } from "./three/sceneKit";
 
 const capitalise = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
@@ -225,6 +234,7 @@ export function RackLocatorView() {
     }
   }, [warehouses, warehouse, aisle]);
 
+  const viewMode = useLocatorViewMode();
   const activeWarehouse = warehouses.find((w) => w.warehouse_code === warehouse);
   const activeAisle = activeWarehouse?.aisles.find((a) => a.aisle_code === aisle);
   const racks = useMemo(
@@ -694,7 +704,7 @@ export function RackLocatorView() {
     <div
       className={cn(
         "relative",
-        placementCard ? "w-full min-w-[150px] sm:w-[220px]" : "w-[180px]",
+        placementCard ? "w-full min-w-[150px] sm:w-[220px]" : "w-[190px]",
       )}
     >
       <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-text-muted" />
@@ -708,7 +718,7 @@ export function RackLocatorView() {
         aria-label="Find a location or model"
         className={cn(
           "w-full rounded-[var(--radius-sm)] border border-border-strong bg-surface pl-8 pr-3 text-sm outline-none placeholder:text-text-muted focus:border-primary focus:ring-2 focus:ring-[color-mix(in_srgb,var(--color-primary)_28%,transparent)]",
-          placementCard ? "h-8" : "h-9",
+          "h-8",
         )}
       />
     </div>
@@ -926,6 +936,11 @@ export function RackLocatorView() {
     );
   }
 
+  const rackOpen = !!rackCode && !!detail.data;
+  // the overview (no rack open, not placing stock) has its own head rows
+  const overview = !placement.active && !rackCode;
+  const showAside = !placementCard || !!findQuery || rackOpen;
+
   const showConfirmBar =
     placement.active && !!line && !placeResult && !!line.model_no && remainingQty > 0;
 
@@ -996,8 +1011,48 @@ export function RackLocatorView() {
     if (additions.length > 0) commitChosen([...chosen, ...additions]);
   }
 
+  const refreshButton = (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => void topology.refetch()}
+      title="Refresh from the database"
+      aria-label="Refresh"
+    >
+      <RefreshCw className={cn("size-3.5", topology.isFetching && "animate-spin")} />
+    </Button>
+  );
+  const pendingPanel = (
+    <div className="mb-4 overflow-hidden rounded-[var(--radius-lg)] border border-border bg-surface shadow-[var(--shadow-sm)] [&>div]:border-t-0">
+      <PendingPlacementsPanel />
+    </div>
+  );
+
   return (
     <div>
+      {!placement.active ? (
+        <LocatorTitleRow
+          warehouseName={activeWarehouse?.warehouse_name ?? undefined}
+          crumbs={crumbs}
+          subtitle={
+            rackCode
+              ? "View and locate free trays across racks, shelves and columns"
+              : "Find and locate free trays across racks, shelves and columns"
+          }
+          actions={
+            <>
+              {cameFromLink ? (
+                <Button variant="secondary" size="sm" onClick={() => router.back()}>
+                  <ArrowLeft className="size-3.5" />
+                  Back
+                </Button>
+              ) : null}
+              {/* the overview's refresh lives in its toolbar */}
+              {rackCode ? refreshButton : null}
+            </>
+          }
+        />
+      ) : (
       <WaveBanner
         breadcrumb={
           placement.active
@@ -1006,14 +1061,49 @@ export function RackLocatorView() {
         }
         title={placement.active ? "Place received stock" : "Rack Locator"}
         subtitle={
-          placement.active
-            ? line?.box_uid
-              ? `Box ${line.box_uid}`
-              : "Pick the trays in the racks below."
-            : "Warehouse occupancy at a glance."
+          placementCard ? (
+            line?.box_uid ? (
+              `Box ${line.box_uid}`
+            ) : (
+              "Pick the trays in the racks below."
+            )
+          ) : (
+            // where you are (and, in overview, how full it is) — the banner
+            // carries what used to be a header card of its own
+            <LocatorHeaderInfo
+              warehouse={activeWarehouse}
+              warehouses={warehouses}
+              activeWarehouseCode={warehouse}
+              onSelectWarehouse={(code) => {
+                setWarehouse(code);
+                setAisle("");
+                setRackCode(null);
+                setSelected(null);
+                setLocateResult(null);
+              }}
+              crumbs={crumbs}
+              showOccupancy={!rackCode}
+              filter={occupancyFilter}
+              onToggleFilter={(tone) =>
+                setOccupancyFilter((cur) => (cur === tone ? null : tone))
+              }
+            />
+          )
         }
         actions={
           <>
+            {placementCard ? null : (
+              <LocatorHeaderControls
+                searchField={searchField}
+                onFind={() => void runSearch()}
+                findLoading={resolve.isPending}
+                onLocate={() => void runLocate()}
+                locateLoading={locate.isPending}
+                locateLabel={placement.active ? "Suggest a tray" : "Locate Me"}
+                pendingOpen={pendingOpen}
+                onTogglePending={() => setPendingOpen((v) => !v)}
+              />
+            )}
             {placement.active ? (
               <Button variant="secondary" size="sm" onClick={() => router.push("/sap-inward")}>
                 <ArrowLeft className="size-3.5" />
@@ -1030,53 +1120,56 @@ export function RackLocatorView() {
               size="sm"
               onClick={() => void topology.refetch()}
               title="Refresh from the database"
+              aria-label="Refresh"
             >
               <RefreshCw className={cn("size-3.5", topology.isFetching && "animate-spin")} />
-              Refresh
             </Button>
           </>
         }
       />
+      )}
+
+      {overview ? (
+        <>
+          <LocatorOverviewBar
+            warehouse={activeWarehouse}
+            warehouses={warehouses}
+            activeWarehouseCode={warehouse}
+            onSelectWarehouse={(code) => {
+              setWarehouse(code);
+              setAisle("");
+              setRackCode(null);
+              setSelected(null);
+              setLocateResult(null);
+            }}
+            crumbs={crumbs}
+            query={query}
+            onQueryChange={setQuery}
+            onFind={() => void runSearch()}
+            findLoading={resolve.isPending}
+            onLocate={() => void runLocate()}
+            locateLoading={locate.isPending}
+            locateLabel="Locate Me"
+            pendingOpen={pendingOpen}
+            onTogglePending={() => setPendingOpen((v) => !v)}
+            onRefresh={() => void topology.refetch()}
+            refreshing={topology.isFetching}
+            trailing={<ViewModeToggle mode={viewMode} variant="tabs" compact className="shrink-0 p-0.5" />}
+          />
+          {pendingOpen ? pendingPanel : null}
+        </>
+      ) : null}
 
       {placement.active ? placementContext() : null}
 
-      {/* One header surface: where you are, what the warehouse looks like, and
-          what you can do. In placement mode the card above carries these
-          controls instead, so this one steps aside rather than doubling up. */}
-      {placementCard ? null : (
-        <OverviewHeaderCard
-          warehouse={activeWarehouse}
-          warehouses={warehouses}
-          activeWarehouseCode={warehouse}
-          onSelectWarehouse={(code) => {
-            setWarehouse(code);
-            setAisle("");
-            setRackCode(null);
-            setSelected(null);
-            setLocateResult(null);
-          }}
-          crumbs={crumbs}
-          showOccupancy={!rackCode}
-          filter={occupancyFilter}
-          onToggleFilter={(tone) =>
-            setOccupancyFilter((cur) => (cur === tone ? null : tone))
-          }
-          searchField={searchField}
-          onFind={() => void runSearch()}
-          findLoading={resolve.isPending}
-          onLocate={() => void runLocate()}
-          locateLoading={locate.isPending}
-          locateLabel={placement.active ? "Suggest a tray" : "Locate Me"}
-          pendingOpen={pendingOpen}
-          onTogglePending={() => setPendingOpen((v) => !v)}
-        />
-      )}
-
+      {/* received lots waiting for a rack — opened from the banner (placement
+          mode) or from the overview toolbar */}
+      {placement.active && !placementCard && pendingOpen ? pendingPanel : null}
 
       <div
         className={cn(
           "grid gap-4",
-          (!placementCard || findQuery) && "lg:grid-cols-[minmax(0,1fr)_290px]",
+          showAside && "lg:grid-cols-[minmax(0,1fr)_360px]",
         )}
       >
         {/* centre stage */}
@@ -1088,6 +1181,7 @@ export function RackLocatorView() {
             activeWarehouse ? (
               <RackOverview
                 warehouse={activeWarehouse}
+                showToggle={!overview}
                 filter={occupancyFilter}
                 onOpen={openRack}
               />
@@ -1105,10 +1199,6 @@ export function RackLocatorView() {
               selected={selected}
               recommendations={gridMarkers}
               onSelect={selectTray}
-              onBack={() => {
-                setRackCode(null);
-                setSelected(null);
-              }}
               pickerMode={showConfirmBar}
               chosenCodes={showConfirmBar ? chosen.map((c) => c.code) : undefined}
               onSelectColumn={showConfirmBar ? selectColumn : undefined}
@@ -1118,11 +1208,24 @@ export function RackLocatorView() {
           )}
         </div>
 
-        {/* selection + recommendations — in placement mode the selection and
-            the nearest-empty list live in the card above; only Find results
-            keep a side column */}
-        {placementCard && !findQuery ? null : (
+        {/* beside the rack: what it holds, the colour key and the selection.
+            In placement mode the selection lives in the card above, so only
+            the rack's own cards and Find results stay here. */}
+        {showAside ? (
           <aside className="space-y-4">
+            {rackOpen && detail.data ? (
+              <>
+                <RackSummaryCard
+                  detail={detail.data}
+                  racks={racks}
+                  onPickRack={(code) => {
+                    setRackCode(code);
+                    setSelected(null);
+                  }}
+                />
+                <LegendCard />
+              </>
+            ) : null}
             {placementCard ? null : (
               <LocationSummary
                 selected={liveSelected}
@@ -1130,6 +1233,27 @@ export function RackLocatorView() {
                 onCleared={() => setSelected(null)}
               />
             )}
+            {overview ? (
+              <>
+                <AisleSummaryCard
+                  aisles={activeWarehouse?.aisles ?? []}
+                  aisleCode={aisle}
+                  onPickAisle={(code) => {
+                    setAisle(code);
+                    setRackCode(null);
+                    setSelected(null);
+                  }}
+                />
+                <EmptyLocationRecommendation
+                  result={locateResult}
+                  selectedCode={selected?.code}
+                  loading={locate.isPending}
+                  onSelect={takeRecommendation}
+                  onMore={() => void runLocate(24)}
+                  onLocate={() => void runLocate()}
+                />
+              </>
+            ) : null}
             {findQuery ? (
               <ModelPlacements
                 query={findQuery}
@@ -1138,18 +1262,25 @@ export function RackLocatorView() {
                 onClose={() => setFindQuery(null)}
               />
             ) : null}
-            {placementCard ? null : (
-              <EmptyLocationRecommendation
-                result={locateResult}
-                selectedCode={selected?.code}
-                loading={locate.isPending}
-                onSelect={takeRecommendation}
-                onMore={() => void runLocate(24)}
-              />
-            )}
           </aside>
-        )}
+        ) : null}
       </div>
+
+      {/* the Locate Me ranking, as a row of cards under the rack (the overview
+          lists it in the right column instead) */}
+      {placementCard || overview ? null : (
+        <div className="mt-4">
+          <EmptyLocationRecommendation
+            layout="strip"
+            result={locateResult}
+            selectedCode={selected?.code}
+            loading={locate.isPending}
+            onSelect={takeRecommendation}
+            onMore={() => void runLocate(24)}
+            onLocate={() => void runLocate()}
+          />
+        </div>
+      )}
 
       {showConfirmBar ? (
         <ConfirmBar

@@ -35,7 +35,7 @@ export function AppShell({ user, children }: { user: User; children: React.React
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-bg">
       {/* ---------- top header ---------- */}
-      <header className="relative z-20 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface px-3 sm:px-4">
+      <header className="relative z-20 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface px-3 text-text sm:px-4">
         <button
           onClick={() => setMobileOpen(true)}
           aria-label="Open menu"
@@ -44,7 +44,7 @@ export function AppShell({ user, children }: { user: User; children: React.React
           <Menu className="size-4" />
         </button>
 
-        <Link href="/dashboard" className="flex items-center gap-2 lg:w-[188px]">
+        <Link href="/dashboard" className="flex items-center gap-2 lg:w-[148px]">
           <Image
             src={logo}
             alt="TITAN"
@@ -53,13 +53,13 @@ export function AppShell({ user, children }: { user: User; children: React.React
             priority
             className="size-6 rounded-[var(--radius-xs)] object-contain"
           />
-          <span className="text-[15px] font-semibold tracking-tight">
+          <span className="text-[15px] font-semibold tracking-[0.06em] text-text">
             TITAN <span className="font-normal text-text-muted">PPC</span>
           </span>
         </Link>
 
         <div className="relative hidden max-w-md flex-1 md:block">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-muted" />
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-text-muted" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -68,7 +68,7 @@ export function AppShell({ user, children }: { user: User; children: React.React
             }}
             aria-label="Search"
             placeholder="Search DC, PO, material, vendor, batch…"
-            className="h-9 w-full rounded-full border border-border bg-surface-2 pl-9 pr-8 text-sm placeholder:text-text-muted outline-none focus:border-primary focus:bg-surface focus:ring-2 focus:ring-[color-mix(in_srgb,var(--color-primary)_22%,transparent)]"
+            className="h-9 w-full rounded-full border border-border bg-surface-2 pl-10 pr-8 text-sm text-text outline-none placeholder:text-text-muted focus:border-primary focus:bg-surface focus:ring-2 focus:ring-[color-mix(in_srgb,var(--color-primary)_22%,transparent)]"
           />
           {query ? (
             <button
@@ -86,18 +86,20 @@ export function AppShell({ user, children }: { user: User; children: React.React
           <Link
             href="/scan"
             className={cn(
-              "ds-focus-ring inline-flex h-9 items-center gap-2 rounded-full px-3.5 text-sm font-semibold transition-colors",
+              "ds-focus-ring inline-flex h-9 items-center gap-2 rounded-[10px] border px-3.5 text-sm font-semibold transition-colors",
               pathname.startsWith("/scan")
-                ? "bg-primary text-[var(--color-primary-fg)]"
-                : "bg-primary-light text-primary hover:bg-[color-mix(in_srgb,var(--color-primary)_16%,transparent)]",
+                ? "border-primary bg-primary text-[var(--color-primary-fg)]"
+                : "border-border text-text hover:bg-surface-2",
             )}
           >
             <ScanLine className="size-4" />
             <span className="hidden sm:inline">Scan</span>
           </Link>
+          <div className="hidden h-7 w-px bg-border sm:block" />
           <LiveIndicator />
-          <div className="mx-0.5 hidden h-6 w-px bg-border sm:block" />
+          <div className="hidden h-7 w-px bg-border sm:block" />
           <NotificationMenu />
+          <div className="hidden h-7 w-px bg-border sm:block" />
           <UserMenu user={user} />
         </div>
       </header>

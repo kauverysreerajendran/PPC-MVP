@@ -33,18 +33,18 @@ export function UserMenu({ user }: { user: Pick<User, "email" | "full_name" | "r
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="ds-focus-ring flex items-center gap-2 rounded-[var(--radius-sm)] px-1.5 py-1 hover:bg-surface-2"
+        className="ds-focus-ring flex items-center gap-2.5 rounded-[var(--radius-sm)] px-1.5 py-1 hover:bg-surface-2"
       >
-        <span className="flex size-7 items-center justify-center rounded-full bg-teal-100 text-xs font-semibold text-teal-800 dark:bg-teal-900 dark:text-teal-200">
+        <span className="flex size-8 items-center justify-center rounded-full bg-teal-100 text-sm font-semibold text-teal-800 dark:bg-teal-900 dark:text-teal-200">
           {initials || "U"}
         </span>
         <span className="hidden text-left sm:block">
-          <span className="block text-xs font-medium leading-tight">{name}</span>
-          <span className="block text-[10px] capitalize leading-tight text-text-muted">
+          <span className="block text-sm font-semibold leading-tight text-text">{name}</span>
+          <span className="block text-[11px] capitalize leading-tight text-text-muted">
             {user.role}
           </span>
         </span>
-        <ChevronDown className="size-3.5 text-text-muted" />
+        <ChevronDown className="size-4 text-text-muted" />
       </button>
 
       {open ? (

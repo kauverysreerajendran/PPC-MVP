@@ -119,6 +119,21 @@
   --color-sidebar-active-to: var(--color-teal-700);
   --shadow-sidebar-tile: 0 1px 3px rgb(12 74 80 / 0.12);
   --shadow-sidebar-tile-hover: 0 2px 6px rgb(12 74 80 / 0.18);
+  /* deep-teal shell: header + menu panel (over the panel art) */
+  --color-shell-from: #0b3542;
+  --color-shell-to: #135463;
+  --color-shell-overlay: rgb(5 32 41 / 0.3);
+  --color-shell-fg: #ffffff;
+  --color-shell-muted: rgb(255 255 255 / 0.62);
+  --color-shell-line: rgb(255 255 255 / 0.1);
+  --color-shell-field: rgb(255 255 255 / 0.1);
+  --color-shell-field-border: rgb(255 255 255 / 0.16);
+  --color-shell-glass: rgb(20 184 166 / 0.16);
+  --color-shell-glass-strong: rgb(45 212 191 / 0.34);
+  --color-shell-text: rgb(255 255 255 / 0.86);
+  --color-shell-icon: rgb(255 255 255 / 0.78);
+  --color-shell-glass-border: rgb(94 234 212 / 0.6);
+  --shadow-shell-glow: 0 0 0 1px rgb(94 234 212 / 0.15), 0 0 18px rgb(45 212 191 / 0.35);
 }
 
 /* Dark theme token overrides */
@@ -151,6 +166,9 @@
     --color-sidebar-active-to: var(--color-teal-800);
     --shadow-sidebar-tile: 0 1px 3px rgb(0 0 0 / 0.4);
     --shadow-sidebar-tile-hover: 0 2px 6px rgb(0 0 0 / 0.5);
+    --color-shell-from: #072630;
+    --color-shell-to: #0d3b46;
+    --color-shell-overlay: rgb(3 18 24 / 0.48);
   }
 }
 
@@ -182,11 +200,19 @@
   --color-sidebar-active-to: var(--color-teal-800);
   --shadow-sidebar-tile: 0 1px 3px rgb(0 0 0 / 0.4);
   --shadow-sidebar-tile-hover: 0 2px 6px rgb(0 0 0 / 0.5);
+  --color-shell-from: #072630;
+  --color-shell-to: #0d3b46;
+  --color-shell-overlay: rgb(3 18 24 / 0.48);
 }
 
-* {
-  box-sizing: border-box;
-  border-color: var(--color-border);
+/* In the base layer, so a border-colour utility (border-primary,
+   border-transparent, …) still wins over this default. Unlayered, it beat
+   every one of them and all borders drew in --color-border. */
+@layer base {
+  * {
+    box-sizing: border-box;
+    border-color: var(--color-border);
+  }
 }
 
 html,
@@ -450,6 +476,27 @@ main::-webkit-scrollbar-thumb,
   width: var(--scene-w);
   height: calc(var(--scene-w) / var(--scene-ar));
   transform: translateX(var(--scene-x));
+  pointer-events: none;
+}
+
+/* On a landscape window the whole banner fits: full width, centred top to
+   bottom, nothing cropped. The margins above and below are filled by
+   `.login-backdrop`, a soft blurred copy, so the page never shows bare bands.
+   Narrow / portrait windows keep the cover crop above, where a full-width
+   banner would be too small to read. */
+@media (min-aspect-ratio: 5/4) {
+  .login-scene {
+    --scene-w: 100vw;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+}
+.login-backdrop {
+  position: absolute;
+  inset: -4%;
+  z-index: 0;
+  filter: blur(28px) saturate(1.1);
+  opacity: 0.75;
   pointer-events: none;
 }
 

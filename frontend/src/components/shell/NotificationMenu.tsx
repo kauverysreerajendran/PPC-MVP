@@ -24,11 +24,11 @@ export function NotificationMenu() {
       <button
         onClick={() => setOpen((v) => !v)}
         aria-label="Notifications"
-        className="ds-focus-ring relative flex size-8 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-surface-2 hover:text-text"
+        className="ds-focus-ring relative flex size-9 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-surface-2 hover:text-text"
       >
-        <Bell className="size-4" />
+        <Bell className="size-[18px]" />
         {unread > 0 ? (
-          <span className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--color-danger)] ring-2 ring-surface" />
+          <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-[var(--color-danger)] ring-2 ring-surface" />
         ) : null}
       </button>
 

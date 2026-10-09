@@ -76,7 +76,7 @@ export function LiveIndicator() {
         {LABEL[shown]}
       </span>
       <span className="hidden text-right tabular-nums leading-tight sm:block">
-        <span className="block text-xs font-semibold" suppressHydrationWarning>
+        <span className="block text-sm font-bold text-text" suppressHydrationWarning>
           {now ? now.toLocaleTimeString([], { hour12: false }) : "--:--:--"}
         </span>
         <span className="block text-[10px] text-text-muted" suppressHydrationWarning>

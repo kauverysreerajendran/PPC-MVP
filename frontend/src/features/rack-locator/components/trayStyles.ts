@@ -191,6 +191,34 @@ export const SUGGESTED_BAR = {
   label: "Suggested (ranked)",
 };
 
+/**
+ * The 3D rack (`three/RackBay3D`) paints trays like the Racks page's 3D view:
+ * a free tray is a lit blue tile, a filled one a slate box. `color` is the CSS
+ * the scene resolves; `className` is the matching legend swatch.
+ */
+export const BAY_TRAY: Record<SlotState, { color: string; className: string; label: string }> = {
+  empty: { color: "var(--color-empty)", className: "bg-[var(--color-empty)]", label: "Empty" },
+  occupied: {
+    color: "var(--color-rack-upright)",
+    className: "bg-[var(--color-rack-upright)]",
+    label: "Occupied",
+  },
+  reserved: { color: "var(--color-warning)", className: "bg-[var(--color-warning)]", label: "Reserved" },
+  blocked: { color: "var(--color-danger)", className: "bg-[var(--color-danger)]", label: "Blocked" },
+};
+
+export const BAY_LEGEND: { className: string; label: string }[] = [
+  BAY_TRAY.empty,
+  BAY_TRAY.occupied,
+  BAY_TRAY.reserved,
+  BAY_TRAY.blocked,
+  { className: "bg-primary", label: "Selected" },
+  {
+    className: "bg-[color-mix(in_srgb,var(--color-primary)_65%,white)]",
+    label: "Suggested (ranked)",
+  },
+];
+
 /** Filled and empty first — the two tones the matrix is really made of. */
 export const TRAY_BAR_LEGEND: { className: string; label: string }[] = [
   TRAY_BAR.occupied,

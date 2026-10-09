@@ -1,17 +1,11 @@
-import {
-  LayoutGrid,
-  Database,
-  Package,
-  MapPin,
-  ClipboardCheck,
-  Bell,
-  type LucideIcon,
-} from "lucide-react";
+import { Bell, Box, ChartLine, House, LogOut, MapPin, type LucideIcon } from "lucide-react";
 
 export type NavItem = {
   label: string;
   href: string;
   icon: LucideIcon;
+  /** the icon reads well filled — drawn solid while it is the current page */
+  solid?: boolean;
   badge?: number;
 };
 
@@ -23,12 +17,12 @@ export type NavSection = {
 export const NAV_SECTIONS: NavSection[] = [
   {
     items: [
-      { label: "Dashboard", href: "/dashboard", icon: LayoutGrid },
-      { label: "SAP Outward", href: "/sap-outward", icon: Database },
-      { label: "SAP Inward", href: "/sap-inward", icon: Package },
-      { label: "Rack Locator", href: "/rack-locator", icon: MapPin },
-      { label: "Reports", href: "/reports", icon: ClipboardCheck },
-      { label: "Notifications", href: "/notifications", icon: Bell },
+      { label: "Dashboard", href: "/dashboard", icon: House },
+      { label: "SAP Inward", href: "/sap-inward", icon: Box },
+      { label: "Rack Locator", href: "/rack-locator", icon: MapPin, solid: true },
+      { label: "SAP Outward", href: "/sap-outward", icon: LogOut },
+      { label: "Reports", href: "/reports", icon: ChartLine },
+      { label: "Notifications", href: "/notifications", icon: Bell, solid: true },
     ],
   },
 ];
